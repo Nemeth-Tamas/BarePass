@@ -1,0 +1,9 @@
+/target
+
+# Local BarePass vaults must never be staged accidentally.
+*.vault
+*.vault.tmp
+
+# Editor / OS debris.
+.DS_Store
+Thumbs.db
