@@ -3,6 +3,8 @@
 ## Project rules
 
 * [x] Rust project.
+* [x] Split runtime, application state, data model, cryptography, vault storage, and TUI rendering into focused modules from the first functional implementation.
+* [x] Keep `main.rs` limited to terminal/runtime wiring rather than allowing the application to grow as a monolith.
 * [x] Proper Ratatui TUI rather than numbered CLI menus.
 * [x] Windows-first native terminal development target.
 * [ ] Linux support.
