@@ -26,6 +26,10 @@ impl UnlockedVault {
         &self.data
     }
 
+    pub(crate) fn data_mut(&mut self) -> &mut Vault {
+        &mut self.data
+    }
+
     pub(crate) fn kdf(&self) -> KdfConfig {
         self.kdf
     }

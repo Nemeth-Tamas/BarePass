@@ -44,19 +44,19 @@
 
 ## Phase 1 — usable password vault
 
-* [ ] Add password/login entries from the TUI.
+* [x] Add password/login entries from the TUI.
 * [ ] Edit existing entries.
 * [ ] Delete entries through a confirmation dialog.
-* [ ] Build keyboard-navigable entry list.
-* [ ] Build entry detail panel.
+* [x] Build keyboard-navigable entry list.
+* [x] Build entry detail panel.
 * [ ] Search/filter entries live.
 * [ ] Copy username to clipboard.
 * [ ] Copy password to clipboard.
 * [ ] Automatically clear copied secrets from the clipboard.
 * [ ] Reveal/hide password action.
-* [ ] Persist edits without retaining the master password.
-* [ ] Update vault timestamps when contents change.
-* [ ] Generate unique stable entry IDs.
+* [x] Persist edits without retaining the master password.
+* [x] Update vault timestamps when contents change.
+* [x] Generate unique stable entry IDs.
 * [ ] Add crash-safe/atomic vault writes before normal CRUD is trusted.
 * [ ] Protect against two BarePass processes modifying the same vault simultaneously.
 * [ ] Move normal vault storage from the working directory to the OS-native application data location.

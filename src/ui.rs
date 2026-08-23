@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::{App, Mode};
+use crate::app::{AddField, App, Mode};
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -22,6 +22,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
 
     match app.mode() {
         Mode::Vault => draw_vault(frame, app, chunks[1]),
+        Mode::AddEntry => {
+            draw_vault(frame, app, chunks[1]);
+            draw_add_entry(frame, app, chunks[1]);
+        }
         Mode::Create | Mode::Confirm | Mode::Unlock => {
             draw_secret_screen(frame, app, chunks[1]);
         }
@@ -80,7 +84,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
             " Unlock BarePass ",
             "Enter your master password to decrypt the local vault.",
         ),
-        Mode::Vault => return,
+        Mode::Vault | Mode::AddEntry => return,
     };
 
     let outer = Block::default()
@@ -189,13 +193,23 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         active_entries
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(index, entry)| {
+                let selected = index == app.selected_index();
+
+                let marker = if selected { " > " } else { "   " };
+
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
                 Line::from(vec![
-                    Span::styled(" > ", Style::default().fg(Color::Cyan)),
-                    Span::styled(
-                        format!("#{}  {}", entry.id, entry.title),
-                        Style::default().fg(Color::White),
-                    ),
+                    Span::styled(marker, Style::default().fg(Color::Cyan)),
+                    Span::styled(format!("#{}  {}", entry.id, entry.title), style),
                 ])
             })
             .collect()
@@ -216,7 +230,7 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(list, columns[0]);
 
-    let details = if let Some(entry) = active_entries.first() {
+    let details = if let Some(entry) = app.selected_entry() {
         vec![
             Line::from(""),
             Line::from(vec![
@@ -292,9 +306,101 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(details, columns[1]);
 }
 
+fn draw_add_entry(frame: &mut Frame, app: &App, area: Rect) {
+    let popup = centered_rect(76, 23, area);
+
+    frame.render_widget(Clear, popup);
+
+    let outer = Block::default()
+        .title(" Add password ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let inner = outer.inner(popup);
+
+    frame.render_widget(outer, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new("Create a login entry. Only the title is required.")
+            .style(Style::default().fg(Color::Gray)),
+        rows[0],
+    );
+
+    let fields = [
+        AddField::Title,
+        AddField::Username,
+        AddField::Password,
+        AddField::Url,
+        AddField::Notes,
+    ];
+
+    for (index, field) in fields.into_iter().enumerate() {
+        let label = match field {
+            AddField::Title => " Title ",
+            AddField::Username => " Username ",
+            AddField::Password => " Password ",
+            AddField::Url => " URL ",
+            AddField::Notes => " Notes ",
+        };
+
+        let value = app.add_form().value(field);
+
+        let display = if field == AddField::Password {
+            "•".repeat(value.chars().count())
+        } else if value.is_empty() {
+            " ".to_string()
+        } else {
+            value.to_string()
+        };
+
+        let selected = app.add_form().field() == field;
+
+        let border_style = if selected {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let text_style = if field == AddField::Password {
+            Style::default().fg(Color::Magenta)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let field_widget = Paragraph::new(display).style(text_style).block(
+            Block::default()
+                .title(label)
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        );
+
+        frame.render_widget(field_widget, rows[index + 1]);
+    }
+
+    frame.render_widget(
+        Paragraph::new("Tab / Shift+Tab fields  •  Enter next/save  •  Ctrl+S save  •  Esc cancel")
+            .style(Style::default().fg(Color::DarkGray)),
+        rows[6],
+    );
+}
+
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.mode() {
-        Mode::Vault => "  l Lock   q Quit   Ctrl+C Quit",
+        Mode::Vault => "  a Add   ↑↓/jk Select   l Lock   q Quit",
+        Mode::AddEntry => "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel",
         Mode::Create | Mode::Confirm | Mode::Unlock => "  Enter Confirm   Esc Back/Quit",
     };
 
