@@ -138,7 +138,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Create => "Minimum 12 characters  •  Enter continue  •  Esc quit",
         Mode::Confirm => "Enter create vault  •  Esc start over",
         Mode::Unlock => "Enter unlock  •  Esc quit",
-        Mode::Vault => "",
+        Mode::Vault | Mode::AddEntry => "",
     };
 
     frame.render_widget(

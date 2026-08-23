@@ -45,6 +45,7 @@
 ## Phase 1 — usable password vault
 
 * [x] Add password/login entries from the TUI.
+* [x] Keep application-mode handling exhaustive when introducing new TUI modes.
 * [ ] Edit existing entries.
 * [ ] Delete entries through a confirmation dialog.
 * [x] Build keyboard-navigable entry list.
