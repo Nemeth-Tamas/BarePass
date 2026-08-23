@@ -15,6 +15,7 @@ pub(crate) enum Mode {
     Unlock,
     Vault,
     AddEntry,
+    EditEntry,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,16 @@ impl AddEntryForm {
             url: String::new(),
             notes: String::new(),
         }
+    }
+
+    fn load_from_entry(&mut self, entry: &PasswordEntry) {
+        self.reset();
+
+        self.title.push_str(&entry.title);
+        self.username.push_str(&entry.username);
+        self.password.push_str(&entry.password);
+        self.url.push_str(&entry.url);
+        self.notes.push_str(&entry.notes);
     }
 
     pub(crate) fn field(&self) -> AddField {
@@ -136,6 +147,7 @@ pub(crate) struct App {
     vault_path: PathBuf,
     selected: usize,
     add_form: AddEntryForm,
+    editing_entry_id: Option<u64>,
     status: String,
     should_quit: bool,
 }
@@ -164,6 +176,7 @@ impl App {
             vault_path,
             selected: 0,
             add_form: AddEntryForm::new(),
+            editing_entry_id: None,
             status,
             should_quit: false,
         }
@@ -223,7 +236,7 @@ impl App {
 
         match self.mode {
             Mode::Vault => self.handle_vault_key(key),
-            Mode::AddEntry => self.handle_add_entry_key(key),
+            Mode::AddEntry | Mode::EditEntry => self.handle_entry_form_key(key),
             Mode::Create | Mode::Confirm | Mode::Unlock => {
                 self.handle_secret_key(key);
             }
@@ -235,31 +248,40 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('l') => self.lock_vault(),
             KeyCode::Char('a') => self.open_add_entry(),
+            KeyCode::Char('e') => self.open_edit_entry(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection_down(),
             _ => {}
         }
     }
 
-    fn handle_add_entry_key(&mut self, key: KeyEvent) {
+    fn handle_entry_form_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
         {
-            self.save_add_entry();
+            self.save_entry_form();
             return;
         }
 
         match key.code {
             KeyCode::Esc => {
+                let was_editing = self.mode == Mode::EditEntry;
+
                 self.add_form.reset();
+                self.editing_entry_id = None;
                 self.mode = Mode::Vault;
-                self.status = "New password entry cancelled.".into();
+
+                self.status = if was_editing {
+                    "Password edit cancelled.".into()
+                } else {
+                    "New password entry cancelled.".into()
+                };
             }
             KeyCode::Tab => self.add_form.next_field(),
             KeyCode::BackTab => self.add_form.previous_field(),
             KeyCode::Enter => {
                 if self.add_form.field() == AddField::Notes {
-                    self.save_add_entry();
+                    self.save_entry_form();
                 } else {
                     self.add_form.next_field();
                 }
@@ -277,10 +299,44 @@ impl App {
         }
     }
 
+    fn save_entry_form(&mut self) {
+        match self.mode {
+            Mode::AddEntry => self.save_add_entry(),
+            Mode::EditEntry => self.save_edit_entry(),
+            Mode::Create | Mode::Confirm | Mode::Unlock | Mode::Vault => {}
+        }
+    }
+
     fn open_add_entry(&mut self) {
         self.add_form.reset();
+        self.editing_entry_id = None;
         self.mode = Mode::AddEntry;
         self.status = "Adding a new password entry.".into();
+    }
+
+    fn open_edit_entry(&mut self) {
+        let Some(vault) = self.vault.as_ref() else {
+            self.status = "Vault is no longer unlocked.".into();
+            return;
+        };
+
+        let Some(entry) = vault
+            .data()
+            .entries
+            .iter()
+            .filter(|entry| entry.deleted_unix.is_none())
+            .nth(self.selected)
+        else {
+            self.status = "There is no password entry selected to edit.".into();
+            return;
+        };
+
+        let entry_id = entry.id;
+
+        self.add_form.load_from_entry(entry);
+        self.editing_entry_id = Some(entry_id);
+        self.mode = Mode::EditEntry;
+        self.status = format!("Editing password entry #{entry_id}.");
     }
 
     fn move_selection_up(&mut self) {
@@ -338,7 +394,7 @@ impl App {
             Mode::Create => self.begin_confirmation(),
             Mode::Confirm => self.finish_creation(),
             Mode::Unlock => self.unlock_existing(),
-            Mode::Vault | Mode::AddEntry => {}
+            Mode::Vault | Mode::AddEntry | Mode::EditEntry => {}
         }
     }
 
@@ -466,8 +522,97 @@ impl App {
 
         self.selected = active_count.saturating_sub(1);
         self.add_form.reset();
+        self.editing_entry_id = None;
         self.mode = Mode::Vault;
         self.status = format!("Password entry #{id} saved to the encrypted vault.");
+    }
+
+    fn save_edit_entry(&mut self) {
+        let Some(id) = self.editing_entry_id else {
+            self.add_form.reset();
+            self.mode = Mode::Vault;
+            self.status = "No password entry is selected for editing.".into();
+            return;
+        };
+
+        let title = self.add_form.value(AddField::Title).trim();
+
+        if title.is_empty() {
+            self.add_form.field = AddField::Title;
+            self.status = "A password entry needs a title.".into();
+            return;
+        }
+
+        let title = title.to_string();
+        let username = self.add_form.value(AddField::Username).to_string();
+        let password = self.add_form.value(AddField::Password).to_string();
+        let url = self.add_form.value(AddField::Url).to_string();
+        let notes = self.add_form.value(AddField::Notes).to_string();
+        let vault_path = self.vault_path.clone();
+
+        let Some(vault) = self.vault.as_mut() else {
+            self.add_form.reset();
+            self.editing_entry_id = None;
+            self.mode = Mode::Unlock;
+            self.status = "Vault is no longer unlocked.".into();
+            return;
+        };
+
+        let previous_updated = vault.data().updated_unix;
+
+        let (old_title, old_username, old_password, old_url, old_notes) = {
+            let Some(entry) = vault.data().entries.iter().find(|entry| entry.id == id) else {
+                self.add_form.reset();
+                self.editing_entry_id = None;
+                self.mode = Mode::Vault;
+                self.status = format!("Password entry #{id} no longer exists.");
+                return;
+            };
+
+            (
+                Zeroizing::new(entry.title.clone()),
+                Zeroizing::new(entry.username.clone()),
+                Zeroizing::new(entry.password.clone()),
+                Zeroizing::new(entry.url.clone()),
+                Zeroizing::new(entry.notes.clone()),
+            )
+        };
+
+        if let Err(error) = vault
+            .data_mut()
+            .update_password_entry(id, title, username, password, url, notes)
+        {
+            self.status = format!("Could not update password entry: {error}");
+            return;
+        }
+
+        if let Err(error) = save_unlocked_vault(&vault_path, vault) {
+            let data = vault.data_mut();
+
+            if let Some(entry) = data.entries.iter_mut().find(|entry| entry.id == id) {
+                entry.title.zeroize();
+                entry.username.zeroize();
+                entry.password.zeroize();
+                entry.url.zeroize();
+                entry.notes.zeroize();
+
+                entry.title.push_str(old_title.as_str());
+                entry.username.push_str(old_username.as_str());
+                entry.password.push_str(old_password.as_str());
+                entry.url.push_str(old_url.as_str());
+                entry.notes.push_str(old_notes.as_str());
+            }
+
+            data.updated_unix = previous_updated;
+
+            self.status = format!("Could not save edited password entry: {error}");
+            return;
+        }
+
+        self.add_form.reset();
+        self.editing_entry_id = None;
+        self.mode = Mode::Vault;
+        self.status = format!("Password entry #{id} updated in the encrypted vault.");
     }
 
     fn lock_vault(&mut self) {
@@ -476,6 +621,7 @@ impl App {
         self.input.zeroize();
         self.pending_password.zeroize();
         self.add_form.reset();
+        self.editing_entry_id = None;
 
         self.selected = 0;
         self.mode = Mode::Unlock;

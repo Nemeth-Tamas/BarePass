@@ -54,6 +54,38 @@ impl Vault {
 
         Ok(id)
     }
+
+    pub(crate) fn update_password_entry(
+        &mut self,
+        id: u64,
+        title: String,
+        username: String,
+        password: String,
+        url: String,
+        notes: String,
+    ) -> Result<(), String> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == id && entry.deleted_unix.is_none())
+            .ok_or_else(|| format!("password entry #{id} was not found"))?;
+
+        entry.title.zeroize();
+        entry.username.zeroize();
+        entry.password.zeroize();
+        entry.url.zeroize();
+        entry.notes.zeroize();
+
+        entry.title = title;
+        entry.username = username;
+        entry.password = password;
+        entry.url = url;
+        entry.notes = notes;
+
+        self.updated_unix = now_unix();
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,5 +155,44 @@ mod tests {
                 .iter()
                 .all(|entry| entry.deleted_unix.is_none())
         );
+    }
+
+    #[test]
+    fn editing_password_entry_preserves_id_and_replaces_fields() {
+        let mut vault = Vault::new();
+
+        let id = vault
+            .add_password_entry(
+                "Old title".into(),
+                "old-user".into(),
+                "old-password".into(),
+                "https://old.example".into(),
+                "old notes".into(),
+            )
+            .unwrap();
+
+        vault.updated_unix = 0;
+
+        vault
+            .update_password_entry(
+                id,
+                "New title".into(),
+                "new-user".into(),
+                "new-password".into(),
+                "https://new.example".into(),
+                "new notes".into(),
+            )
+            .unwrap();
+
+        let entry = &vault.entries[0];
+
+        assert_eq!(entry.id, id);
+        assert_eq!(entry.title, "New title");
+        assert_eq!(entry.username, "new-user");
+        assert_eq!(entry.password, "new-password");
+        assert_eq!(entry.url, "https://new.example");
+        assert_eq!(entry.notes, "new notes");
+        assert_eq!(entry.deleted_unix, None);
+        assert!(vault.updated_unix > 0);
     }
 }

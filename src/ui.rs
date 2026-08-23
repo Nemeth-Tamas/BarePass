@@ -22,9 +22,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
 
     match app.mode() {
         Mode::Vault => draw_vault(frame, app, chunks[1]),
-        Mode::AddEntry => {
+        Mode::AddEntry | Mode::EditEntry => {
             draw_vault(frame, app, chunks[1]);
-            draw_add_entry(frame, app, chunks[1]);
+            draw_entry_form(frame, app, chunks[1]);
         }
         Mode::Create | Mode::Confirm | Mode::Unlock => {
             draw_secret_screen(frame, app, chunks[1]);
@@ -84,7 +84,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
             " Unlock BarePass ",
             "Enter your master password to decrypt the local vault.",
         ),
-        Mode::Vault | Mode::AddEntry => return,
+        Mode::Vault | Mode::AddEntry | Mode::EditEntry => return,
     };
 
     let outer = Block::default()
@@ -138,7 +138,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Create => "Minimum 12 characters  •  Enter continue  •  Esc quit",
         Mode::Confirm => "Enter create vault  •  Esc start over",
         Mode::Unlock => "Enter unlock  •  Esc quit",
-        Mode::Vault | Mode::AddEntry => "",
+        Mode::Vault | Mode::AddEntry | Mode::EditEntry => "",
     };
 
     frame.render_widget(
@@ -306,13 +306,25 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(details, columns[1]);
 }
 
-fn draw_add_entry(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
     let popup = centered_rect(76, 23, area);
 
     frame.render_widget(Clear, popup);
 
+    let (title, description) = match app.mode() {
+        Mode::AddEntry => (
+            " Add password ",
+            "Create a login entry. Only the title is required.",
+        ),
+        Mode::EditEntry => (
+            " Edit password ",
+            "Update the selected login entry. Its vault ID will stay the same.",
+        ),
+        Mode::Create | Mode::Confirm | Mode::Unlock | Mode::Vault => return,
+    };
+
     let outer = Block::default()
-        .title(" Add password ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Magenta));
 
@@ -334,8 +346,7 @@ fn draw_add_entry(frame: &mut Frame, app: &App, area: Rect) {
         .split(inner);
 
     frame.render_widget(
-        Paragraph::new("Create a login entry. Only the title is required.")
-            .style(Style::default().fg(Color::Gray)),
+        Paragraph::new(description).style(Style::default().fg(Color::Gray)),
         rows[0],
     );
 
@@ -399,8 +410,10 @@ fn draw_add_entry(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.mode() {
-        Mode::Vault => "  a Add   ↑↓/jk Select   l Lock   q Quit",
-        Mode::AddEntry => "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel",
+        Mode::Vault => "  a Add   e Edit   ↑↓/jk Select   l Lock   q Quit",
+        Mode::AddEntry | Mode::EditEntry => {
+            "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel"
+        }
         Mode::Create | Mode::Confirm | Mode::Unlock => "  Enter Confirm   Esc Back/Quit",
     };
 
