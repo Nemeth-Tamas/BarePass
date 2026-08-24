@@ -251,6 +251,11 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(list, columns[0]);
 
+    let auto_lock = match app.auto_lock_seconds() {
+        Some(seconds) => format!("{seconds} seconds inactivity"),
+        None => "Disabled".to_string(),
+    };
+
     let details = if let Some(entry) = app.selected_entry() {
         vec![
             Line::from(""),
@@ -278,6 +283,11 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("Notes       ", Style::default().fg(Color::DarkGray)),
                 Span::styled(entry.notes.as_str(), Style::default().fg(Color::Gray)),
             ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Auto-lock   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(auto_lock, Style::default().fg(Color::Green)),
+            ]),
         ]
     } else {
         let kdf = unlocked.kdf();
@@ -303,6 +313,7 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
             Line::from(format!("Created     {}", unlocked.data().created_unix)),
             Line::from(format!("Updated     {}", unlocked.data().updated_unix)),
             Line::from(format!("Vault file  {}", app.vault_path().display())),
+            Line::from(format!("Auto-lock   {auto_lock}")),
             Line::from(""),
             Line::from(Span::styled(
                 "Master password is not retained.",

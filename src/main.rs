@@ -125,6 +125,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<(), 
                 _ => {}
             }
         }
+
+        app.handle_tick();
     }
 
     Ok(())

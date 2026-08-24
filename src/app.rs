@@ -1,4 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use zeroize::{Zeroize, Zeroizing};
@@ -10,6 +15,24 @@ use crate::{
         prepare_vault_path, save_unlocked_vault,
     },
 };
+
+const AUTO_LOCK_ENV: &str = "BAREPASS_AUTO_LOCK_SECS";
+const DEFAULT_AUTO_LOCK_SECS: u64 = 300;
+
+fn auto_lock_timeout_from_value(value: Option<&OsStr>) -> Option<Duration> {
+    let seconds = value
+        .and_then(OsStr::to_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_AUTO_LOCK_SECS);
+
+    (seconds != 0).then_some(Duration::from_secs(seconds))
+}
+
+fn inactivity_expired(vault_unlocked: bool, timeout: Option<Duration>, idle_for: Duration) -> bool {
+    vault_unlocked && timeout.is_some_and(|timeout| idle_for >= timeout)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -204,12 +227,16 @@ pub(crate) struct App {
     permanent_delete_entry_id: Option<u64>,
     empty_recently_deleted_confirmation: bool,
     status: String,
+    auto_lock_timeout: Option<Duration>,
+    last_activity: Instant,
     should_quit: bool,
 }
 
 impl App {
     pub(crate) fn new() -> Self {
         let legacy_fallback = PathBuf::from("barepass.vault");
+
+        let auto_lock_timeout = auto_lock_timeout_from_value(env::var_os(AUTO_LOCK_ENV).as_deref());
 
         let (vault_path, storage_notice) = match prepare_vault_path() {
             Ok((path, notice)) => (path, notice),
@@ -252,6 +279,8 @@ impl App {
             permanent_delete_entry_id: None,
             empty_recently_deleted_confirmation: false,
             status,
+            auto_lock_timeout,
+            last_activity: Instant::now(),
             should_quit: false,
         }
     }
@@ -316,6 +345,10 @@ impl App {
         &self.status
     }
 
+    pub(crate) fn auto_lock_seconds(&self) -> Option<u64> {
+        self.auto_lock_timeout.map(|timeout| timeout.as_secs())
+    }
+
     pub(crate) fn should_quit(&self) -> bool {
         self.should_quit
     }
@@ -324,6 +357,8 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return;
         }
+
+        self.last_activity = Instant::now();
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
@@ -339,6 +374,26 @@ impl App {
                 self.handle_secret_key(key);
             }
         }
+    }
+
+    pub(crate) fn handle_tick(&mut self) {
+        if !inactivity_expired(
+            self.vault.is_some(),
+            self.auto_lock_timeout,
+            self.last_activity.elapsed(),
+        ) {
+            return;
+        }
+
+        let seconds = self
+            .auto_lock_timeout
+            .map(|timeout| timeout.as_secs())
+            .unwrap_or_default();
+
+        self.lock_vault();
+        self.status = format!(
+            "Vault auto-locked after {seconds} seconds of inactivity. Encryption key cleared from memory."
+        );
     }
 
     fn handle_vault_key(&mut self, key: KeyEvent) {
@@ -732,6 +787,7 @@ impl App {
                 Ok(()) => {
                     self.vault = Some(unlocked);
                     self.vault_lock = Some(vault_lock);
+                    self.last_activity = Instant::now();
 
                     self.input.zeroize();
                     self.pending_password.zeroize();
@@ -763,6 +819,7 @@ impl App {
             Ok(unlocked) => {
                 self.vault = Some(unlocked);
                 self.vault_lock = Some(vault_lock);
+                self.last_activity = Instant::now();
 
                 self.input.zeroize();
                 self.pending_password.zeroize();
@@ -1168,15 +1225,21 @@ impl App {
         self.selected = 0;
         self.deleted_selected = 0;
         self.mode = Mode::Unlock;
+        self.last_activity = Instant::now();
         self.status = "Vault locked. Encryption key cleared from memory.".into();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{ffi::OsStr, time::Duration};
+
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::{clear_text_input, delete_previous_word, is_delete_word_shortcut};
+    use super::{
+        auto_lock_timeout_from_value, clear_text_input, delete_previous_word, inactivity_expired,
+        is_delete_word_shortcut,
+    };
 
     #[test]
     fn delete_previous_word_handles_unicode_and_trailing_whitespace() {
@@ -1223,5 +1286,32 @@ mod tests {
         let plain_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
 
         assert!(!is_delete_word_shortcut(&plain_backspace));
+    }
+
+    #[test]
+    fn auto_lock_configuration_supports_default_override_disable_and_invalid_fallback() {
+        assert_eq!(
+            auto_lock_timeout_from_value(None),
+            Some(Duration::from_secs(300))
+        );
+        assert_eq!(
+            auto_lock_timeout_from_value(Some(OsStr::new("15"))),
+            Some(Duration::from_secs(15))
+        );
+        assert_eq!(auto_lock_timeout_from_value(Some(OsStr::new("0"))), None);
+        assert_eq!(
+            auto_lock_timeout_from_value(Some(OsStr::new("not-a-number"))),
+            Some(Duration::from_secs(300))
+        );
+    }
+
+    #[test]
+    fn inactivity_expiration_requires_an_unlocked_vault_and_enabled_timeout() {
+        let timeout = Some(Duration::from_secs(5));
+
+        assert!(!inactivity_expired(false, timeout, Duration::from_secs(10)));
+        assert!(!inactivity_expired(true, timeout, Duration::from_secs(4)));
+        assert!(inactivity_expired(true, timeout, Duration::from_secs(5)));
+        assert!(!inactivity_expired(true, None, Duration::from_secs(10)));
     }
 }
