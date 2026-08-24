@@ -132,6 +132,22 @@ impl Vault {
 
         Ok((index, entry))
     }
+
+    pub(crate) fn permanently_delete_all_deleted_entries(&mut self) -> Vec<(usize, PasswordEntry)> {
+        let mut removed = Vec::new();
+
+        for index in (0..self.entries.len()).rev() {
+            if self.entries[index].deleted_unix.is_some() {
+                removed.push((index, self.entries.remove(index)));
+            }
+        }
+
+        if !removed.is_empty() {
+            self.updated_unix = now_unix();
+        }
+
+        removed
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -301,5 +317,53 @@ mod tests {
         assert_eq!(removed.url, "https://delete.example");
         assert_eq!(removed.notes, "delete these notes");
         assert!(removed.deleted_unix.is_some());
+    }
+
+    #[test]
+    fn empty_recently_deleted_removes_only_deleted_entries() {
+        let mut vault = Vault::new();
+
+        let active_id = vault
+            .add_password_entry(
+                "Keep me".into(),
+                "active-user".into(),
+                "active-password".into(),
+                "https://active.example".into(),
+                "active notes".into(),
+            )
+            .unwrap();
+
+        let deleted_one = vault
+            .add_password_entry(
+                "Delete one".into(),
+                "deleted-one".into(),
+                "deleted-password-one".into(),
+                "https://deleted-one.example".into(),
+                String::new(),
+            )
+            .unwrap();
+
+        let deleted_two = vault
+            .add_password_entry(
+                "Delete two".into(),
+                "deleted-two".into(),
+                "deleted-password-two".into(),
+                "https://deleted-two.example".into(),
+                String::new(),
+            )
+            .unwrap();
+
+        vault.move_password_entry_to_deleted(deleted_one).unwrap();
+        vault.move_password_entry_to_deleted(deleted_two).unwrap();
+
+        let removed = vault.permanently_delete_all_deleted_entries();
+
+        assert_eq!(removed.len(), 2);
+        assert_eq!(removed[0].0, 2);
+        assert_eq!(removed[1].0, 1);
+        assert_eq!(vault.entries.len(), 1);
+        assert_eq!(vault.entries[0].id, active_id);
+        assert_eq!(vault.entries[0].title, "Keep me");
+        assert_eq!(vault.entries[0].deleted_unix, None);
     }
 }

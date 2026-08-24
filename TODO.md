@@ -73,7 +73,7 @@ This is a pre-1.0 core requirement, not an optional stretch goal.
 * [x] Show deletion timestamp.
 * [x] Restore an item from Recently Deleted.
 * [x] Permanently delete a selected item with an explicit confirmation.
-* [ ] Empty Recently Deleted with an explicit confirmation.
+* [x] Empty Recently Deleted with an explicit confirmation.
 * [ ] Add configurable automatic purge age.
 * [x] Ensure ordinary accidental deletion cannot permanently destroy vault data.
 * [x] Add recovery tests covering delete → restore → save → reopen.

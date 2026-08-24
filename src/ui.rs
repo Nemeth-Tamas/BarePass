@@ -28,7 +28,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             draw_entry_form(frame, app, chunks[1]);
         }
         Mode::ConfirmDelete => {
-            if app.is_permanent_delete_confirmation() {
+            if app.is_empty_recently_deleted_confirmation() {
+                draw_recently_deleted(frame, app, chunks[1]);
+                draw_empty_recently_deleted_confirmation(frame, app, chunks[1]);
+            } else if app.is_permanent_delete_confirmation() {
                 draw_recently_deleted(frame, app, chunks[1]);
                 draw_permanent_delete_confirmation(frame, app, chunks[1]);
             } else {
@@ -435,7 +438,7 @@ fn draw_recently_deleted(frame: &mut Frame, app: &App, area: Rect) {
             ]),
             Line::from(""),
             Line::from(Span::styled(
-                "Press r to restore or d to permanently delete this item.",
+                "r restore  •  d delete forever  •  x empty all",
                 Style::default().fg(Color::Green),
             )),
         ]
@@ -690,17 +693,95 @@ fn draw_permanent_delete_confirmation(frame: &mut Frame, app: &App, area: Rect) 
     );
 }
 
+fn draw_empty_recently_deleted_confirmation(frame: &mut Frame, app: &App, area: Rect) {
+    let popup = centered_rect(72, 15, area);
+
+    frame.render_widget(Clear, popup);
+
+    let deleted_count = app
+        .vault()
+        .map(|vault| {
+            vault
+                .data()
+                .entries
+                .iter()
+                .filter(|entry| entry.deleted_unix.is_some())
+                .count()
+        })
+        .unwrap_or(0);
+
+    let outer = Block::default()
+        .title(" Empty Recently Deleted ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let inner = outer.inner(popup);
+
+    frame.render_widget(outer, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Min(1),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Permanently delete all {deleted_count} recoverable item(s)?"
+        ))
+        .style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .wrap(Wrap { trim: true }),
+        rows[0],
+    );
+
+    frame.render_widget(
+        Paragraph::new("Every item in Recently Deleted will be destroyed.")
+            .style(Style::default().fg(Color::Red)),
+        rows[1],
+    );
+
+    frame.render_widget(
+        Paragraph::new("Active vault entries are not affected.")
+            .style(Style::default().fg(Color::Green)),
+        rows[2],
+    );
+
+    frame.render_widget(
+        Paragraph::new("This cannot be undone by BarePass.")
+            .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        rows[3],
+    );
+
+    frame.render_widget(
+        Paragraph::new("Enter / y  Empty forever    Esc / n  Keep items")
+            .style(Style::default().fg(Color::DarkGray)),
+        rows[4],
+    );
+}
+
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.mode() {
         Mode::Vault => "  a Add   e Edit   d Delete   Tab Deleted   ↑↓/jk Select   l Lock   q Quit",
         Mode::RecentlyDeleted => {
-            "  r Restore   d Delete forever   Tab/Esc Active   ↑↓/jk Select   l Lock   q Quit"
+            "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"
         }
         Mode::AddEntry | Mode::EditEntry => {
             "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel"
         }
         Mode::ConfirmDelete => {
-            if app.is_permanent_delete_confirmation() {
+            if app.is_empty_recently_deleted_confirmation() {
+                "  Enter/y Empty forever   Esc/n Cancel"
+            } else if app.is_permanent_delete_confirmation() {
                 "  Enter/y Delete forever   Esc/n Cancel"
             } else {
                 "  Enter/y Confirm   Esc/n Cancel"

@@ -198,6 +198,7 @@ pub(crate) struct App {
     add_form: AddEntryForm,
     editing_entry_id: Option<u64>,
     permanent_delete_entry_id: Option<u64>,
+    empty_recently_deleted_confirmation: bool,
     status: String,
     should_quit: bool,
 }
@@ -229,6 +230,7 @@ impl App {
             add_form: AddEntryForm::new(),
             editing_entry_id: None,
             permanent_delete_entry_id: None,
+            empty_recently_deleted_confirmation: false,
             status,
             should_quit: false,
         }
@@ -272,6 +274,10 @@ impl App {
 
     pub(crate) fn is_permanent_delete_confirmation(&self) -> bool {
         self.permanent_delete_entry_id.is_some()
+    }
+
+    pub(crate) fn is_empty_recently_deleted_confirmation(&self) -> bool {
+        self.empty_recently_deleted_confirmation
     }
 
     pub(crate) fn add_form(&self) -> &AddEntryForm {
@@ -343,6 +349,9 @@ impl App {
             KeyCode::Char('d') => {
                 self.open_permanent_delete_confirmation();
             }
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                self.open_empty_recently_deleted_confirmation();
+            }
             KeyCode::Up | KeyCode::Char('k') => self.move_deleted_selection_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_deleted_selection_down(),
             _ => {}
@@ -350,23 +359,27 @@ impl App {
     }
 
     fn handle_delete_confirmation_key(&mut self, key: KeyEvent) {
+        let empty_all = self.empty_recently_deleted_confirmation;
         let permanent = self.permanent_delete_entry_id.is_some();
 
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if permanent {
+                if empty_all {
+                    self.empty_recently_deleted();
+                } else if permanent {
                     self.permanently_delete_selected_entry();
                 } else {
                     self.move_selected_entry_to_deleted();
                 }
             }
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
-                self.mode = if permanent {
+                self.mode = if permanent || empty_all {
                     Mode::RecentlyDeleted
                 } else {
                     Mode::Vault
                 };
                 self.permanent_delete_entry_id = None;
+                self.empty_recently_deleted_confirmation = false;
                 self.status = "Delete cancelled.".into();
             }
             _ => {}
@@ -471,6 +484,33 @@ impl App {
         };
     }
 
+    fn open_empty_recently_deleted_confirmation(&mut self) {
+        let deleted_count = self
+            .vault
+            .as_ref()
+            .map(|vault| {
+                vault
+                    .data()
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.deleted_unix.is_some())
+                    .count()
+            })
+            .unwrap_or(0);
+
+        if deleted_count == 0 {
+            self.status = "Recently Deleted is already empty.".into();
+            return;
+        }
+
+        self.permanent_delete_entry_id = None;
+        self.empty_recently_deleted_confirmation = true;
+        self.mode = Mode::ConfirmDelete;
+        self.status = format!(
+            "Confirm permanently deleting all {deleted_count} item(s) from Recently Deleted."
+        );
+    }
+
     fn open_permanent_delete_confirmation(&mut self) {
         let Some(entry_id) = self.selected_deleted_entry().map(|entry| entry.id) else {
             self.status =
@@ -478,6 +518,7 @@ impl App {
             return;
         };
 
+        self.empty_recently_deleted_confirmation = false;
         self.permanent_delete_entry_id = Some(entry_id);
         self.mode = Mode::ConfirmDelete;
         self.status = format!(
@@ -491,6 +532,7 @@ impl App {
             return;
         };
 
+        self.empty_recently_deleted_confirmation = false;
         self.permanent_delete_entry_id = None;
         self.mode = Mode::ConfirmDelete;
         self.status = format!("Confirm moving password entry #{entry_id} to Recently Deleted.");
@@ -1012,6 +1054,54 @@ impl App {
         self.status = format!("Password entry #{id} permanently deleted.");
     }
 
+    fn empty_recently_deleted(&mut self) {
+        if !self.empty_recently_deleted_confirmation {
+            self.mode = Mode::RecentlyDeleted;
+            self.status = "Recently Deleted empty confirmation is not active.".into();
+            return;
+        }
+
+        let vault_path = self.vault_path.clone();
+
+        let Some(vault) = self.vault.as_mut() else {
+            self.empty_recently_deleted_confirmation = false;
+            self.mode = Mode::Unlock;
+            self.status = "Vault is no longer unlocked.".into();
+            return;
+        };
+
+        let previous_updated = vault.data().updated_unix;
+        let removed = vault.data_mut().permanently_delete_all_deleted_entries();
+        let removed_count = removed.len();
+
+        if removed_count == 0 {
+            self.empty_recently_deleted_confirmation = false;
+            self.mode = Mode::RecentlyDeleted;
+            self.status = "Recently Deleted is already empty.".into();
+            return;
+        }
+
+        if let Err(error) = save_unlocked_vault(&vault_path, vault) {
+            let data = vault.data_mut();
+
+            for (index, entry) in removed.into_iter().rev() {
+                data.entries.insert(index, entry);
+            }
+
+            data.updated_unix = previous_updated;
+
+            self.empty_recently_deleted_confirmation = false;
+            self.mode = Mode::RecentlyDeleted;
+            self.status = format!("Could not save empty Recently Deleted operation: {error}");
+            return;
+        }
+
+        self.deleted_selected = 0;
+        self.empty_recently_deleted_confirmation = false;
+        self.mode = Mode::RecentlyDeleted;
+        self.status = format!("Permanently deleted {removed_count} item(s) from Recently Deleted.");
+    }
+
     fn lock_vault(&mut self) {
         self.vault = None;
 
@@ -1020,6 +1110,7 @@ impl App {
         self.add_form.reset();
         self.editing_entry_id = None;
         self.permanent_delete_entry_id = None;
+        self.empty_recently_deleted_confirmation = false;
 
         self.selected = 0;
         self.deleted_selected = 0;
