@@ -49,7 +49,7 @@
 * [x] Delete entries through a confirmation dialog.
 * [x] Build keyboard-navigable entry list.
 * [x] Build entry detail panel.
-* [ ] Search/filter entries live.
+* [x] Search/filter entries live.
 * [ ] Copy username to clipboard.
 * [ ] Copy password to clipboard.
 * [ ] Automatically clear copied secrets from the clipboard.

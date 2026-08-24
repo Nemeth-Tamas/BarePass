@@ -34,6 +34,27 @@ fn inactivity_expired(vault_unlocked: bool, timeout: Option<Duration>, idle_for:
     vault_unlocked && timeout.is_some_and(|timeout| idle_for >= timeout)
 }
 
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let needle = needle.as_bytes();
+
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn password_entry_matches_search(entry: &PasswordEntry, query: &str) -> bool {
+    query.is_empty()
+        || contains_ascii_case_insensitive(&entry.title, query)
+        || contains_ascii_case_insensitive(&entry.username, query)
+        || contains_ascii_case_insensitive(&entry.url, query)
+        || contains_ascii_case_insensitive(&entry.notes, query)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     Create,
@@ -217,6 +238,8 @@ pub(crate) struct App {
     permanent_delete_entry_id: Option<u64>,
     empty_recently_deleted_confirmation: bool,
     status: String,
+    search_query: Zeroizing<String>,
+    search_editing: bool,
     auto_lock_timeout: Option<Duration>,
     last_activity: Instant,
     should_quit: bool,
@@ -269,6 +292,8 @@ impl App {
             permanent_delete_entry_id: None,
             empty_recently_deleted_confirmation: false,
             status,
+            search_query: Zeroizing::new(String::new()),
+            search_editing: false,
             auto_lock_timeout,
             last_activity: Instant::now(),
             should_quit: false,
@@ -293,8 +318,40 @@ impl App {
             .data()
             .entries
             .iter()
-            .filter(|entry| entry.deleted_unix.is_none())
+            .filter(|entry| {
+                entry.deleted_unix.is_none()
+                    && password_entry_matches_search(entry, self.search_query.as_str())
+            })
             .nth(self.selected)
+    }
+
+    pub(crate) fn entry_matches_search(&self, entry: &PasswordEntry) -> bool {
+        password_entry_matches_search(entry, self.search_query.as_str())
+    }
+
+    pub(crate) fn search_query(&self) -> &str {
+        self.search_query.as_str()
+    }
+
+    pub(crate) fn search_editing(&self) -> bool {
+        self.search_editing
+    }
+
+    pub(crate) fn filtered_active_count(&self) -> usize {
+        self.vault
+            .as_ref()
+            .map(|vault| {
+                vault
+                    .data()
+                    .entries
+                    .iter()
+                    .filter(|entry| {
+                        entry.deleted_unix.is_none()
+                            && password_entry_matches_search(entry, self.search_query.as_str())
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     pub(crate) fn deleted_selected_index(&self) -> usize {
@@ -387,9 +444,22 @@ impl App {
     }
 
     fn handle_vault_key(&mut self, key: KeyEvent) {
+        if self.search_editing {
+            self.handle_search_key(key);
+            return;
+        }
+
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('l') => self.lock_vault(),
+            KeyCode::Char('/') => {
+                self.search_editing = true;
+                self.selected = 0;
+                self.update_search_status();
+            }
+            KeyCode::Esc if !self.search_query.is_empty() => {
+                self.clear_search();
+            }
             KeyCode::Char('a') => self.open_add_entry(),
             KeyCode::Char('e') => self.open_edit_entry(),
             KeyCode::Char('d') => self.open_delete_confirmation(),
@@ -398,6 +468,64 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.move_selection_down(),
             _ => {}
         }
+    }
+
+    fn handle_search_key(&mut self, key: KeyEvent) {
+        if is_delete_word_shortcut(&key) {
+            delete_previous_word(&mut self.search_query);
+            self.selected = 0;
+            self.update_search_status();
+            return;
+        }
+
+        if is_clear_input_shortcut(&key) {
+            clear_text_input(&mut self.search_query);
+            self.selected = 0;
+            self.update_search_status();
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => self.clear_search(),
+            KeyCode::Enter => {
+                self.search_editing = false;
+                self.update_search_status();
+            }
+            KeyCode::Up => self.move_selection_up(),
+            KeyCode::Down => self.move_selection_down(),
+            KeyCode::Backspace => {
+                self.search_query.pop();
+                self.selected = 0;
+                self.update_search_status();
+            }
+            KeyCode::Char(character)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.search_query.push(character);
+                self.selected = 0;
+                self.update_search_status();
+            }
+            _ => {}
+        }
+    }
+
+    fn update_search_status(&mut self) {
+        let count = self.filtered_active_count();
+
+        self.status = if self.search_query.is_empty() {
+            format!("Search active. {count} password entry(s) available.")
+        } else {
+            format!("Search filter matches {count} password entry(s).")
+        };
+    }
+
+    fn clear_search(&mut self) {
+        self.search_query.zeroize();
+        self.search_query.clear();
+        self.search_editing = false;
+        self.selected = 0;
+        self.status = "Search cleared.".into();
     }
 
     fn handle_recently_deleted_key(&mut self, key: KeyEvent) {
@@ -519,6 +647,10 @@ impl App {
     }
 
     fn open_add_entry(&mut self) {
+        self.search_query.zeroize();
+        self.search_query.clear();
+        self.search_editing = false;
+        self.selected = 0;
         self.add_form.reset();
         self.editing_entry_id = None;
         self.mode = Mode::AddEntry;
@@ -526,6 +658,10 @@ impl App {
     }
 
     fn open_recently_deleted(&mut self) {
+        self.search_query.zeroize();
+        self.search_query.clear();
+        self.search_editing = false;
+        self.selected = 0;
         self.deleted_selected = 0;
         self.mode = Mode::RecentlyDeleted;
 
@@ -613,7 +749,10 @@ impl App {
             .data()
             .entries
             .iter()
-            .filter(|entry| entry.deleted_unix.is_none())
+            .filter(|entry| {
+                entry.deleted_unix.is_none()
+                    && password_entry_matches_search(entry, self.search_query.as_str())
+            })
             .nth(self.selected)
         else {
             self.status = "There is no password entry selected to edit.".into();
@@ -633,21 +772,18 @@ impl App {
     }
 
     fn move_selection_down(&mut self) {
-        let active_count = self
-            .vault
-            .as_ref()
-            .map(|vault| {
-                vault
-                    .data()
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.deleted_unix.is_none())
-                    .count()
-            })
-            .unwrap_or(0);
+        let active_count = self.filtered_active_count();
 
         if self.selected + 1 < active_count {
             self.selected += 1;
+        }
+    }
+
+    fn clamp_active_selection(&mut self) {
+        let active_count = self.filtered_active_count();
+
+        if self.selected >= active_count {
+            self.selected = active_count.saturating_sub(1);
         }
     }
 
@@ -876,14 +1012,7 @@ impl App {
             return;
         }
 
-        let active_count = vault
-            .data()
-            .entries
-            .iter()
-            .filter(|entry| entry.deleted_unix.is_none())
-            .count();
-
-        self.selected = active_count.saturating_sub(1);
+        self.selected = self.filtered_active_count().saturating_sub(1);
         self.add_form.reset();
         self.editing_entry_id = None;
         self.mode = Mode::Vault;
@@ -978,6 +1107,7 @@ impl App {
 
         self.add_form.reset();
         self.editing_entry_id = None;
+        self.clamp_active_selection();
         self.mode = Mode::Vault;
         self.status = format!("Password entry #{id} updated in the encrypted vault.");
     }
@@ -1026,17 +1156,7 @@ impl App {
             return;
         }
 
-        let active_count = vault
-            .data()
-            .entries
-            .iter()
-            .filter(|entry| entry.deleted_unix.is_none())
-            .count();
-
-        if self.selected >= active_count {
-            self.selected = active_count.saturating_sub(1);
-        }
-
+        self.clamp_active_selection();
         self.mode = Mode::Vault;
         self.status = format!("Password entry #{id} moved to Recently Deleted.");
     }
@@ -1218,6 +1338,9 @@ impl App {
         self.editing_entry_id = None;
         self.permanent_delete_entry_id = None;
         self.empty_recently_deleted_confirmation = false;
+        self.search_query.zeroize();
+        self.search_query.clear();
+        self.search_editing = false;
 
         self.selected = 0;
         self.deleted_selected = 0;
@@ -1235,8 +1358,9 @@ mod tests {
 
     use super::{
         auto_lock_timeout_from_value, clear_text_input, delete_previous_word, inactivity_expired,
-        is_delete_word_shortcut,
+        is_delete_word_shortcut, password_entry_matches_search,
     };
+    use crate::model::PasswordEntry;
 
     #[test]
     fn delete_previous_word_handles_unicode_and_trailing_whitespace() {
@@ -1310,5 +1434,28 @@ mod tests {
         assert!(!inactivity_expired(true, timeout, Duration::from_secs(4)));
         assert!(inactivity_expired(true, timeout, Duration::from_secs(5)));
         assert!(!inactivity_expired(true, None, Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn search_matches_visible_metadata_but_never_password_contents() {
+        let entry = PasswordEntry {
+            id: 1,
+            title: "GitHub Work".into(),
+            username: "Tamas@Example.Test".into(),
+            password: "hidden-search-secret".into(),
+            url: "https://github.com".into(),
+            notes: "Documentation account".into(),
+            deleted_unix: None,
+        };
+
+        assert!(password_entry_matches_search(&entry, ""));
+        assert!(password_entry_matches_search(&entry, "github"));
+        assert!(password_entry_matches_search(&entry, "EXAMPLE.TEST"));
+        assert!(password_entry_matches_search(&entry, "documentation"));
+        assert!(!password_entry_matches_search(
+            &entry,
+            "hidden-search-secret"
+        ));
+        assert!(!password_entry_matches_search(&entry, "missing"));
     }
 }

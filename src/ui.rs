@@ -178,11 +178,18 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(area);
 
-    let active_entries: Vec<_> = unlocked
+    let total_active_count = unlocked
         .data()
         .entries
         .iter()
         .filter(|entry| entry.deleted_unix.is_none())
+        .count();
+
+    let active_entries: Vec<_> = unlocked
+        .data()
+        .entries
+        .iter()
+        .filter(|entry| entry.deleted_unix.is_none() && app.entry_matches_search(entry))
         .collect();
 
     let deleted_count = unlocked
@@ -192,7 +199,22 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
         .filter(|entry| entry.deleted_unix.is_some())
         .count();
 
-    let list_lines = if active_entries.is_empty() {
+    let list_lines = if active_entries.is_empty() && total_active_count != 0 {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No entries match your search.",
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::ITALIC),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Esc clears the current filter.",
+                Style::default().fg(Color::Cyan),
+            )),
+        ]
+    } else if active_entries.is_empty() {
         vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -237,14 +259,33 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
             .collect()
     };
 
+    let list_title = if app.search_editing() || !app.search_query().is_empty() {
+        Line::from(vec![
+            Span::raw(format!(
+                " Vault  {}/{} match  /  {} deleted  |  Search: ",
+                active_entries.len(),
+                total_active_count,
+                deleted_count
+            )),
+            Span::styled(
+                app.search_query(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ])
+    } else {
+        Line::from(format!(
+            " Vault  {} active  /  {} deleted ",
+            total_active_count, deleted_count
+        ))
+    };
+
     let list = Paragraph::new(list_lines)
         .block(
             Block::default()
-                .title(format!(
-                    " Vault  {} active  /  {} deleted ",
-                    active_entries.len(),
-                    deleted_count
-                ))
+                .title(list_title)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)),
         )
@@ -792,7 +833,15 @@ fn draw_empty_recently_deleted_confirmation(frame: &mut Frame, app: &App, area: 
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.mode() {
-        Mode::Vault => "  a Add   e Edit   d Delete   Tab Deleted   ↑↓/jk Select   l Lock   q Quit",
+        Mode::Vault if app.search_editing() => {
+            "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"
+        }
+        Mode::Vault if !app.search_query().is_empty() => {
+            "  / Edit search   Esc Clear   a Add   e Edit   d Delete   ↑↓/jk Select"
+        }
+        Mode::Vault => {
+            "  / Search   a Add   e Edit   d Delete   Tab Deleted   ↑↓/jk Select   l Lock   q Quit"
+        }
         Mode::RecentlyDeleted => {
             "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"
         }
