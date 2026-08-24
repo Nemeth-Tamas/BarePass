@@ -151,6 +151,7 @@ pub(crate) struct App {
     deleted_selected: usize,
     add_form: AddEntryForm,
     editing_entry_id: Option<u64>,
+    permanent_delete_entry_id: Option<u64>,
     status: String,
     should_quit: bool,
 }
@@ -181,6 +182,7 @@ impl App {
             deleted_selected: 0,
             add_form: AddEntryForm::new(),
             editing_entry_id: None,
+            permanent_delete_entry_id: None,
             status,
             should_quit: false,
         }
@@ -220,6 +222,10 @@ impl App {
             .iter()
             .filter(|entry| entry.deleted_unix.is_some())
             .nth(self.deleted_selected)
+    }
+
+    pub(crate) fn is_permanent_delete_confirmation(&self) -> bool {
+        self.permanent_delete_entry_id.is_some()
     }
 
     pub(crate) fn add_form(&self) -> &AddEntryForm {
@@ -288,6 +294,9 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.restore_selected_deleted_entry();
             }
+            KeyCode::Char('d') => {
+                self.open_permanent_delete_confirmation();
+            }
             KeyCode::Up | KeyCode::Char('k') => self.move_deleted_selection_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_deleted_selection_down(),
             _ => {}
@@ -295,12 +304,23 @@ impl App {
     }
 
     fn handle_delete_confirmation_key(&mut self, key: KeyEvent) {
+        let permanent = self.permanent_delete_entry_id.is_some();
+
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                self.move_selected_entry_to_deleted();
+                if permanent {
+                    self.permanently_delete_selected_entry();
+                } else {
+                    self.move_selected_entry_to_deleted();
+                }
             }
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
-                self.mode = Mode::Vault;
+                self.mode = if permanent {
+                    Mode::RecentlyDeleted
+                } else {
+                    Mode::Vault
+                };
+                self.permanent_delete_entry_id = None;
                 self.status = "Delete cancelled.".into();
             }
             _ => {}
@@ -395,12 +415,27 @@ impl App {
         };
     }
 
+    fn open_permanent_delete_confirmation(&mut self) {
+        let Some(entry_id) = self.selected_deleted_entry().map(|entry| entry.id) else {
+            self.status =
+                "There is no deleted password entry selected to permanently delete.".into();
+            return;
+        };
+
+        self.permanent_delete_entry_id = Some(entry_id);
+        self.mode = Mode::ConfirmDelete;
+        self.status = format!(
+            "Confirm permanently deleting password entry #{entry_id}. This cannot be undone."
+        );
+    }
+
     fn open_delete_confirmation(&mut self) {
         let Some(entry_id) = self.selected_entry().map(|entry| entry.id) else {
             self.status = "There is no password entry selected to delete.".into();
             return;
         };
 
+        self.permanent_delete_entry_id = None;
         self.mode = Mode::ConfirmDelete;
         self.status = format!("Confirm moving password entry #{entry_id} to Recently Deleted.");
     }
@@ -854,6 +889,63 @@ impl App {
             format!("Password entry #{id} restored. Tab or Esc returns to the active vault.");
     }
 
+    fn permanently_delete_selected_entry(&mut self) {
+        let Some(id) = self.permanent_delete_entry_id else {
+            self.mode = Mode::RecentlyDeleted;
+            self.status =
+                "There is no deleted password entry selected to permanently delete.".into();
+            return;
+        };
+
+        let vault_path = self.vault_path.clone();
+
+        let Some(vault) = self.vault.as_mut() else {
+            self.permanent_delete_entry_id = None;
+            self.mode = Mode::Unlock;
+            self.status = "Vault is no longer unlocked.".into();
+            return;
+        };
+
+        let previous_updated = vault.data().updated_unix;
+
+        let (removed_index, removed_entry) =
+            match vault.data_mut().permanently_delete_password_entry(id) {
+                Ok(removed) => removed,
+                Err(error) => {
+                    self.permanent_delete_entry_id = None;
+                    self.mode = Mode::RecentlyDeleted;
+                    self.status = format!("Could not permanently delete password entry: {error}");
+                    return;
+                }
+            };
+
+        if let Err(error) = save_unlocked_vault(&vault_path, vault) {
+            let data = vault.data_mut();
+            data.entries.insert(removed_index, removed_entry);
+            data.updated_unix = previous_updated;
+
+            self.permanent_delete_entry_id = None;
+            self.mode = Mode::RecentlyDeleted;
+            self.status = format!("Could not save permanent deletion: {error}");
+            return;
+        }
+
+        let deleted_count = vault
+            .data()
+            .entries
+            .iter()
+            .filter(|entry| entry.deleted_unix.is_some())
+            .count();
+
+        if self.deleted_selected >= deleted_count {
+            self.deleted_selected = deleted_count.saturating_sub(1);
+        }
+
+        self.permanent_delete_entry_id = None;
+        self.mode = Mode::RecentlyDeleted;
+        self.status = format!("Password entry #{id} permanently deleted.");
+    }
+
     fn lock_vault(&mut self) {
         self.vault = None;
 
@@ -861,6 +953,7 @@ impl App {
         self.pending_password.zeroize();
         self.add_form.reset();
         self.editing_entry_id = None;
+        self.permanent_delete_entry_id = None;
 
         self.selected = 0;
         self.deleted_selected = 0;

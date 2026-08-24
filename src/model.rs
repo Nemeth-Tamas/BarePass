@@ -116,6 +116,22 @@ impl Vault {
 
         Ok(())
     }
+
+    pub(crate) fn permanently_delete_password_entry(
+        &mut self,
+        id: u64,
+    ) -> Result<(usize, PasswordEntry), String> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.id == id && entry.deleted_unix.is_some())
+            .ok_or_else(|| format!("deleted password entry #{id} was not found"))?;
+
+        let entry = self.entries.remove(index);
+        self.updated_unix = now_unix();
+
+        Ok((index, entry))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,5 +270,36 @@ mod tests {
         assert_eq!(entry.notes, "keep these notes");
         assert_eq!(entry.deleted_unix, Some(deleted_unix));
         assert_eq!(vault.updated_unix, deleted_unix);
+    }
+
+    #[test]
+    fn permanent_delete_only_removes_an_entry_after_soft_delete() {
+        let mut vault = Vault::new();
+
+        let id = vault
+            .add_password_entry(
+                "Disposable account".into(),
+                "delete-this-user".into(),
+                "delete-this-password".into(),
+                "https://delete.example".into(),
+                "delete these notes".into(),
+            )
+            .unwrap();
+
+        assert!(vault.permanently_delete_password_entry(id).is_err());
+
+        vault.move_password_entry_to_deleted(id).unwrap();
+
+        let (index, removed) = vault.permanently_delete_password_entry(id).unwrap();
+
+        assert_eq!(index, 0);
+        assert!(vault.entries.is_empty());
+        assert_eq!(removed.id, id);
+        assert_eq!(removed.title, "Disposable account");
+        assert_eq!(removed.username, "delete-this-user");
+        assert_eq!(removed.password, "delete-this-password");
+        assert_eq!(removed.url, "https://delete.example");
+        assert_eq!(removed.notes, "delete these notes");
+        assert!(removed.deleted_unix.is_some());
     }
 }
