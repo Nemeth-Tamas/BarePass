@@ -2,7 +2,7 @@ use std::{
     env,
     ffi::OsStr,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -19,6 +19,9 @@ use crate::{
 
 const AUTO_LOCK_ENV: &str = "BAREPASS_AUTO_LOCK_SECS";
 const DEFAULT_AUTO_LOCK_SECS: u64 = 300;
+const AUTO_PURGE_ENV: &str = "BAREPASS_PURGE_DAYS";
+const DEFAULT_AUTO_PURGE_DAYS: u64 = 30;
+const SECONDS_PER_DAY: u64 = 86_400;
 
 fn auto_lock_timeout_from_value(value: Option<&OsStr>) -> Option<Duration> {
     let seconds = value
@@ -29,6 +32,17 @@ fn auto_lock_timeout_from_value(value: Option<&OsStr>) -> Option<Duration> {
         .unwrap_or(DEFAULT_AUTO_LOCK_SECS);
 
     (seconds != 0).then_some(Duration::from_secs(seconds))
+}
+
+fn auto_purge_days_from_value(value: Option<&OsStr>) -> Option<u64> {
+    let days = value
+        .and_then(OsStr::to_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_AUTO_PURGE_DAYS);
+
+    (days != 0).then_some(days)
 }
 
 fn inactivity_expired(vault_unlocked: bool, timeout: Option<Duration>, idle_for: Duration) -> bool {
@@ -243,6 +257,7 @@ pub(crate) struct App {
     search_editing: bool,
     clipboard: Option<ClipboardManager>,
     revealed_password_entry_id: Option<u64>,
+    auto_purge_days: Option<u64>,
     auto_lock_timeout: Option<Duration>,
     last_activity: Instant,
     should_quit: bool,
@@ -253,6 +268,7 @@ impl App {
         let legacy_fallback = PathBuf::from("barepass.vault");
 
         let auto_lock_timeout = auto_lock_timeout_from_value(env::var_os(AUTO_LOCK_ENV).as_deref());
+        let auto_purge_days = auto_purge_days_from_value(env::var_os(AUTO_PURGE_ENV).as_deref());
 
         let (vault_path, storage_notice) = match prepare_vault_path() {
             Ok((path, notice)) => (path, notice),
@@ -299,6 +315,7 @@ impl App {
             search_editing: false,
             clipboard: None,
             revealed_password_entry_id: None,
+            auto_purge_days,
             auto_lock_timeout,
             last_activity: Instant::now(),
             should_quit: false,
@@ -402,6 +419,10 @@ impl App {
 
     pub(crate) fn status(&self) -> &str {
         &self.status
+    }
+
+    pub(crate) fn auto_purge_days(&self) -> Option<u64> {
+        self.auto_purge_days
     }
 
     pub(crate) fn auto_lock_seconds(&self) -> Option<u64> {
@@ -1070,7 +1091,9 @@ impl App {
         };
 
         match load_unlocked_vault(&self.vault_path, self.input.as_str()) {
-            Ok(unlocked) => {
+            Ok(mut unlocked) => {
+                let purge_result = self.purge_expired_deleted_entries(&mut unlocked);
+
                 self.vault = Some(unlocked);
                 self.vault_lock = Some(vault_lock);
                 self.last_activity = Instant::now();
@@ -1079,7 +1102,15 @@ impl App {
                 self.pending_password.zeroize();
 
                 self.mode = Mode::Vault;
-                self.status = "Vault unlocked successfully.".into();
+                self.status = match purge_result {
+                    Ok(0) => "Vault unlocked successfully.".into(),
+                    Ok(count) => format!(
+                        "Vault unlocked. Automatically purged {count} expired item(s) from Recently Deleted."
+                    ),
+                    Err(error) => {
+                        format!("Vault unlocked, but automatic purge failed safely: {error}")
+                    }
+                };
             }
             Err(_) => {
                 self.input.zeroize();
@@ -1087,6 +1118,39 @@ impl App {
                 self.status = "Unlock failed: wrong master password or damaged vault.".into();
             }
         }
+    }
+
+    fn purge_expired_deleted_entries(&self, vault: &mut UnlockedVault) -> Result<usize, String> {
+        let Some(days) = self.auto_purge_days else {
+            return Ok(0);
+        };
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let cutoff = now.saturating_sub(days.saturating_mul(SECONDS_PER_DAY));
+        let previous_updated = vault.data().updated_unix;
+        let removed = vault.data_mut().purge_deleted_before(cutoff);
+        let removed_count = removed.len();
+
+        if removed_count == 0 {
+            return Ok(0);
+        }
+
+        if let Err(error) = save_unlocked_vault(&self.vault_path, vault) {
+            let data = vault.data_mut();
+
+            for (index, entry) in removed.into_iter().rev() {
+                data.entries.insert(index, entry);
+            }
+
+            data.updated_unix = previous_updated;
+
+            return Err(format!("could not save automatic purge: {error}"));
+        }
+
+        Ok(removed_count)
     }
 
     fn save_add_entry(&mut self) {
@@ -1490,8 +1554,9 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::{
-        auto_lock_timeout_from_value, clear_text_input, delete_previous_word, inactivity_expired,
-        is_delete_word_shortcut, password_entry_matches_search,
+        auto_lock_timeout_from_value, auto_purge_days_from_value, clear_text_input,
+        delete_previous_word, inactivity_expired, is_delete_word_shortcut,
+        password_entry_matches_search,
     };
     use crate::model::PasswordEntry;
 
@@ -1556,6 +1621,17 @@ mod tests {
         assert_eq!(
             auto_lock_timeout_from_value(Some(OsStr::new("not-a-number"))),
             Some(Duration::from_secs(300))
+        );
+    }
+
+    #[test]
+    fn auto_purge_configuration_supports_default_override_disable_and_invalid_fallback() {
+        assert_eq!(auto_purge_days_from_value(None), Some(30));
+        assert_eq!(auto_purge_days_from_value(Some(OsStr::new("45"))), Some(45));
+        assert_eq!(auto_purge_days_from_value(Some(OsStr::new("0"))), None);
+        assert_eq!(
+            auto_purge_days_from_value(Some(OsStr::new("not-a-number"))),
+            Some(30)
         );
     }
 

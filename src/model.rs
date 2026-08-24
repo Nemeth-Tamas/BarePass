@@ -160,6 +160,25 @@ impl Vault {
 
         removed
     }
+
+    pub(crate) fn purge_deleted_before(&mut self, cutoff_unix: u64) -> Vec<(usize, PasswordEntry)> {
+        let mut removed = Vec::new();
+
+        for index in (0..self.entries.len()).rev() {
+            if self.entries[index]
+                .deleted_unix
+                .is_some_and(|deleted_unix| deleted_unix <= cutoff_unix)
+            {
+                removed.push((index, self.entries.remove(index)));
+            }
+        }
+
+        if !removed.is_empty() {
+            self.updated_unix = now_unix();
+        }
+
+        removed
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -377,5 +396,70 @@ mod tests {
         assert_eq!(vault.entries[0].id, active_id);
         assert_eq!(vault.entries[0].title, "Keep me");
         assert_eq!(vault.entries[0].deleted_unix, None);
+    }
+
+    #[test]
+    fn purge_deleted_before_removes_only_expired_deleted_entries() {
+        let mut vault = Vault::new();
+
+        let active_id = vault
+            .add_password_entry(
+                "Active".into(),
+                "active-user".into(),
+                "active-password".into(),
+                String::new(),
+                String::new(),
+            )
+            .unwrap();
+
+        let expired_id = vault
+            .add_password_entry(
+                "Expired deleted".into(),
+                "expired-user".into(),
+                "expired-password".into(),
+                String::new(),
+                String::new(),
+            )
+            .unwrap();
+
+        let recent_id = vault
+            .add_password_entry(
+                "Recent deleted".into(),
+                "recent-user".into(),
+                "recent-password".into(),
+                String::new(),
+                String::new(),
+            )
+            .unwrap();
+
+        vault.move_password_entry_to_deleted(expired_id).unwrap();
+        vault.move_password_entry_to_deleted(recent_id).unwrap();
+
+        vault
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == expired_id)
+            .unwrap()
+            .deleted_unix = Some(100);
+        vault
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == recent_id)
+            .unwrap()
+            .deleted_unix = Some(200);
+
+        vault.updated_unix = 0;
+
+        let removed = vault.purge_deleted_before(100);
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].0, 1);
+        assert_eq!(removed[0].1.id, expired_id);
+        assert_eq!(vault.entries.len(), 2);
+        assert_eq!(vault.entries[0].id, active_id);
+        assert_eq!(vault.entries[0].deleted_unix, None);
+        assert_eq!(vault.entries[1].id, recent_id);
+        assert_eq!(vault.entries[1].deleted_unix, Some(200));
+        assert!(vault.updated_unix > 0);
     }
 }
