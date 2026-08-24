@@ -242,6 +242,7 @@ pub(crate) struct App {
     search_query: Zeroizing<String>,
     search_editing: bool,
     clipboard: Option<ClipboardManager>,
+    revealed_password_entry_id: Option<u64>,
     auto_lock_timeout: Option<Duration>,
     last_activity: Instant,
     should_quit: bool,
@@ -297,6 +298,7 @@ impl App {
             search_query: Zeroizing::new(String::new()),
             search_editing: false,
             clipboard: None,
+            revealed_password_entry_id: None,
             auto_lock_timeout,
             last_activity: Instant::now(),
             should_quit: false,
@@ -326,6 +328,13 @@ impl App {
                     && password_entry_matches_search(entry, self.search_query.as_str())
             })
             .nth(self.selected)
+    }
+
+    pub(crate) fn selected_password_revealed(&self) -> bool {
+        self.revealed_password_entry_id.is_some_and(|revealed_id| {
+            self.selected_entry()
+                .is_some_and(|entry| entry.id == revealed_id)
+        })
     }
 
     pub(crate) fn entry_matches_search(&self, entry: &PasswordEntry) -> bool {
@@ -467,6 +476,7 @@ impl App {
             KeyCode::Char('l') => self.lock_vault(),
             KeyCode::Char('/') => {
                 self.search_editing = true;
+                self.revealed_password_entry_id = None;
                 self.selected = 0;
                 self.update_search_status();
             }
@@ -477,6 +487,7 @@ impl App {
             KeyCode::Char('e') => self.open_edit_entry(),
             KeyCode::Char('u') => self.copy_selected_username(),
             KeyCode::Char('p') => self.copy_selected_password(),
+            KeyCode::Char('v') => self.toggle_selected_password_reveal(),
             KeyCode::Char('d') => self.open_delete_confirmation(),
             KeyCode::Tab => self.open_recently_deleted(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection_up(),
@@ -489,6 +500,7 @@ impl App {
         if is_delete_word_shortcut(&key) {
             delete_previous_word(&mut self.search_query);
             self.selected = 0;
+            self.revealed_password_entry_id = None;
             self.update_search_status();
             return;
         }
@@ -496,6 +508,7 @@ impl App {
         if is_clear_input_shortcut(&key) {
             clear_text_input(&mut self.search_query);
             self.selected = 0;
+            self.revealed_password_entry_id = None;
             self.update_search_status();
             return;
         }
@@ -511,6 +524,7 @@ impl App {
             KeyCode::Backspace => {
                 self.search_query.pop();
                 self.selected = 0;
+                self.revealed_password_entry_id = None;
                 self.update_search_status();
             }
             KeyCode::Char(character)
@@ -519,6 +533,7 @@ impl App {
             {
                 self.search_query.push(character);
                 self.selected = 0;
+                self.revealed_password_entry_id = None;
                 self.update_search_status();
             }
             _ => {}
@@ -540,6 +555,7 @@ impl App {
         self.search_query.clear();
         self.search_editing = false;
         self.selected = 0;
+        self.revealed_password_entry_id = None;
         self.status = "Search cleared.".into();
     }
 
@@ -573,6 +589,32 @@ impl App {
         };
 
         self.copy_text_to_clipboard(password.as_str(), "Password");
+    }
+
+    fn toggle_selected_password_reveal(&mut self) {
+        let Some((entry_id, has_password)) = self
+            .selected_entry()
+            .map(|entry| (entry.id, !entry.password.is_empty()))
+        else {
+            self.status = "There is no password entry selected to reveal.".into();
+            return;
+        };
+
+        if !has_password {
+            self.revealed_password_entry_id = None;
+            self.status = "The selected password entry has no password to reveal.".into();
+            return;
+        }
+
+        if self.revealed_password_entry_id == Some(entry_id) {
+            self.revealed_password_entry_id = None;
+            self.status = format!("Password for entry #{entry_id} hidden.");
+        } else {
+            self.revealed_password_entry_id = Some(entry_id);
+            self.status = format!(
+                "Password for entry #{entry_id} revealed on screen. Press v again to hide it."
+            );
+        }
     }
 
     fn copy_text_to_clipboard(&mut self, text: &str, label: &str) {
@@ -726,6 +768,7 @@ impl App {
         self.search_query.clear();
         self.search_editing = false;
         self.selected = 0;
+        self.revealed_password_entry_id = None;
         self.add_form.reset();
         self.editing_entry_id = None;
         self.mode = Mode::AddEntry;
@@ -737,6 +780,7 @@ impl App {
         self.search_query.clear();
         self.search_editing = false;
         self.selected = 0;
+        self.revealed_password_entry_id = None;
         self.deleted_selected = 0;
         self.mode = Mode::RecentlyDeleted;
 
@@ -808,6 +852,7 @@ impl App {
             return;
         };
 
+        self.revealed_password_entry_id = None;
         self.empty_recently_deleted_confirmation = false;
         self.permanent_delete_entry_id = None;
         self.mode = Mode::ConfirmDelete;
@@ -836,6 +881,7 @@ impl App {
 
         let entry_id = entry.id;
 
+        self.revealed_password_entry_id = None;
         self.add_form.load_from_entry(entry);
         self.editing_entry_id = Some(entry_id);
         self.mode = Mode::EditEntry;
@@ -843,7 +889,12 @@ impl App {
     }
 
     fn move_selection_up(&mut self) {
+        let previous = self.selected;
         self.selected = self.selected.saturating_sub(1);
+
+        if self.selected != previous {
+            self.revealed_password_entry_id = None;
+        }
     }
 
     fn move_selection_down(&mut self) {
@@ -851,6 +902,7 @@ impl App {
 
         if self.selected + 1 < active_count {
             self.selected += 1;
+            self.revealed_password_entry_id = None;
         }
     }
 
@@ -859,6 +911,7 @@ impl App {
 
         if self.selected >= active_count {
             self.selected = active_count.saturating_sub(1);
+            self.revealed_password_entry_id = None;
         }
     }
 
@@ -1420,6 +1473,7 @@ impl App {
         self.search_query.zeroize();
         self.search_query.clear();
         self.search_editing = false;
+        self.revealed_password_entry_id = None;
 
         self.selected = 0;
         self.deleted_selected = 0;

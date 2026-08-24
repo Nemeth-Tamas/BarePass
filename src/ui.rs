@@ -299,6 +299,26 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let details = if let Some(entry) = app.selected_entry() {
+        let password_line = if app.selected_password_revealed() {
+            Line::from(vec![
+                Span::styled("Password    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    entry.password.as_str(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("Password    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "•".repeat(entry.password.chars().count()),
+                    Style::default().fg(Color::Magenta),
+                ),
+            ])
+        };
+
         vec![
             Line::from(""),
             Line::from(vec![
@@ -309,13 +329,7 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("Username    ", Style::default().fg(Color::DarkGray)),
                 Span::styled(entry.username.as_str(), Style::default().fg(Color::White)),
             ]),
-            Line::from(vec![
-                Span::styled("Password    ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    "•".repeat(entry.password.chars().count()),
-                    Style::default().fg(Color::Magenta),
-                ),
-            ]),
+            password_line,
             Line::from(vec![
                 Span::styled("URL         ", Style::default().fg(Color::DarkGray)),
                 Span::styled(entry.url.as_str(), Style::default().fg(Color::Cyan)),
@@ -837,10 +851,10 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"
         }
         Mode::Vault if !app.search_query().is_empty() => {
-            "  / Search   Esc Clear   u Copy user   p Copy pass   e Edit   d Delete   ↑↓ Select"
+            "  / Search   Esc Clear   u Copy user   p Copy pass   v Reveal/hide   e Edit   d Delete"
         }
         Mode::Vault => {
-            "  / Search   u Copy user   p Copy pass   a Add   e Edit   d Delete   Tab Deleted"
+            "  / Search   u Copy user   p Copy pass   v Reveal/hide   a Add   e Edit   d Delete"
         }
         Mode::RecentlyDeleted => {
             "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"

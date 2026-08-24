@@ -53,7 +53,7 @@
 * [x] Copy username to clipboard.
 * [x] Copy password to clipboard.
 * [x] Automatically clear copied secrets from the clipboard.
-* [ ] Reveal/hide password action.
+* [x] Reveal/hide password action.
 * [x] Add platform-native word/field deletion shortcuts for text input (Ctrl on Windows/Linux; Option/Command on macOS).
 * [x] Persist edits without retaining the master password.
 * [x] Update vault timestamps when contents change.
