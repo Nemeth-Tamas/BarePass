@@ -1,6 +1,6 @@
 use std::{
     ffi::OsString,
-    fs::{self, OpenOptions},
+    fs::{self, OpenOptions, TryLockError},
     io::Write,
     path::{Path, PathBuf},
 };
@@ -18,6 +18,10 @@ use crate::{
 const MAGIC: &[u8; 8] = b"BRPASS01";
 const HEADER_LEN: usize = 8 + 4 + 4 + 4 + SALT_LEN + NONCE_LEN;
 const MIN_CIPHERTEXT_LEN: usize = 16;
+
+pub(crate) struct VaultLock {
+    _file: fs::File,
+}
 
 pub(crate) struct UnlockedVault {
     data: Vault,
@@ -38,6 +42,39 @@ impl UnlockedVault {
     pub(crate) fn kdf(&self) -> KdfConfig {
         self.kdf
     }
+}
+
+pub(crate) fn acquire_vault_lock(path: &Path) -> Result<VaultLock, String> {
+    let lock_path = vault_lock_path(path);
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .map_err(|error| {
+            format!(
+                "could not open vault lock file {}: {error}",
+                lock_path.display()
+            )
+        })?;
+
+    match file.try_lock() {
+        Ok(()) => Ok(VaultLock { _file: file }),
+        Err(TryLockError::WouldBlock) => {
+            Err("Vault is already open in another BarePass process.".into())
+        }
+        Err(TryLockError::Error(error)) => Err(format!(
+            "could not lock vault through {}: {error}",
+            lock_path.display()
+        )),
+    }
+}
+
+fn vault_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    PathBuf::from(lock_path)
 }
 
 pub(crate) fn create_unlocked_vault(
@@ -334,6 +371,36 @@ mod tests {
         encrypted[20] ^= 0x01;
 
         assert!(decrypt_vault_blob(&encrypted, MASTER_PASSWORD).is_err());
+    }
+
+    #[test]
+    fn vault_lock_blocks_a_second_holder_until_the_first_is_dropped() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let path = std::env::temp_dir().join(format!(
+            "barepass-lock-{}-{unique}.vault",
+            std::process::id()
+        ));
+        let lock_path = vault_lock_path(&path);
+
+        let first = acquire_vault_lock(&path).unwrap();
+
+        let second_error = match acquire_vault_lock(&path) {
+            Ok(_) => panic!("a second vault lock unexpectedly succeeded"),
+            Err(error) => error,
+        };
+
+        assert!(second_error.contains("already open"));
+
+        drop(first);
+
+        let third = acquire_vault_lock(&path).unwrap();
+        drop(third);
+
+        fs::remove_file(lock_path).unwrap();
     }
 
     #[test]

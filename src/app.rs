@@ -5,7 +5,10 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     model::{PasswordEntry, Vault},
-    storage::{UnlockedVault, create_unlocked_vault, load_unlocked_vault, save_unlocked_vault},
+    storage::{
+        UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault, load_unlocked_vault,
+        save_unlocked_vault,
+    },
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -192,6 +195,7 @@ pub(crate) struct App {
     input: Zeroizing<String>,
     pending_password: Zeroizing<String>,
     vault: Option<UnlockedVault>,
+    vault_lock: Option<VaultLock>,
     vault_path: PathBuf,
     selected: usize,
     deleted_selected: usize,
@@ -224,6 +228,7 @@ impl App {
             input: Zeroizing::new(String::new()),
             pending_password: Zeroizing::new(String::new()),
             vault: None,
+            vault_lock: None,
             vault_path,
             selected: 0,
             deleted_selected: 0,
@@ -684,12 +689,34 @@ impl App {
             return;
         }
 
+        let vault_lock = match acquire_vault_lock(&self.vault_path) {
+            Ok(lock) => lock,
+            Err(error) => {
+                self.input.zeroize();
+                self.pending_password.zeroize();
+                self.status = error;
+                return;
+            }
+        };
+
+        if self.vault_path.exists() {
+            self.input.zeroize();
+            self.pending_password.zeroize();
+
+            self.mode = Mode::Unlock;
+            self.status =
+                "A vault appeared while this BarePass process was creating one. Unlock it instead."
+                    .into();
+            return;
+        }
+
         let data = Vault::new();
 
         match create_unlocked_vault(data, self.input.as_str()) {
             Ok(unlocked) => match save_unlocked_vault(&self.vault_path, &unlocked) {
                 Ok(()) => {
                     self.vault = Some(unlocked);
+                    self.vault_lock = Some(vault_lock);
 
                     self.input.zeroize();
                     self.pending_password.zeroize();
@@ -708,9 +735,19 @@ impl App {
     }
 
     fn unlock_existing(&mut self) {
+        let vault_lock = match acquire_vault_lock(&self.vault_path) {
+            Ok(lock) => lock,
+            Err(error) => {
+                self.input.zeroize();
+                self.status = error;
+                return;
+            }
+        };
+
         match load_unlocked_vault(&self.vault_path, self.input.as_str()) {
             Ok(unlocked) => {
                 self.vault = Some(unlocked);
+                self.vault_lock = Some(vault_lock);
 
                 self.input.zeroize();
                 self.pending_password.zeroize();
@@ -1104,6 +1141,7 @@ impl App {
 
     fn lock_vault(&mut self) {
         self.vault = None;
+        self.vault_lock = None;
 
         self.input.zeroize();
         self.pending_password.zeroize();

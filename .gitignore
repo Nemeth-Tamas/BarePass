@@ -2,6 +2,7 @@
 
 # Local BarePass vaults must never be staged accidentally.
 *.vault
+*.vault.lock
 *.vault.tmp
 
 # Editor / OS debris.
