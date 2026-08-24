@@ -141,6 +141,45 @@ impl Drop for AddEntryForm {
     }
 }
 
+fn delete_previous_word(value: &mut String) {
+    while value.chars().next_back().is_some_and(char::is_whitespace) {
+        value.pop();
+    }
+
+    while value
+        .chars()
+        .next_back()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        value.pop();
+    }
+}
+
+fn clear_text_input(value: &mut String) {
+    value.zeroize();
+    value.clear();
+}
+
+#[cfg(target_os = "macos")]
+fn is_delete_word_shortcut(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Backspace && key.modifiers.contains(KeyModifiers::ALT)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_delete_word_shortcut(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Backspace && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+#[cfg(target_os = "macos")]
+fn is_clear_input_shortcut(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Backspace && key.modifiers.contains(KeyModifiers::SUPER)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_clear_input_shortcut(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Delete && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 pub(crate) struct App {
     mode: Mode,
     input: Zeroizing<String>,
@@ -328,6 +367,16 @@ impl App {
     }
 
     fn handle_entry_form_key(&mut self, key: KeyEvent) {
+        if is_delete_word_shortcut(&key) {
+            delete_previous_word(self.add_form.current_value_mut());
+            return;
+        }
+
+        if is_clear_input_shortcut(&key) {
+            clear_text_input(self.add_form.current_value_mut());
+            return;
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
         {
@@ -512,6 +561,16 @@ impl App {
     }
 
     fn handle_secret_key(&mut self, key: KeyEvent) {
+        if is_delete_word_shortcut(&key) {
+            delete_previous_word(&mut self.input);
+            return;
+        }
+
+        if is_clear_input_shortcut(&key) {
+            clear_text_input(&mut self.input);
+            return;
+        }
+
         match key.code {
             KeyCode::Enter => self.submit_secret(),
             KeyCode::Backspace => {
@@ -959,5 +1018,33 @@ impl App {
         self.deleted_selected = 0;
         self.mode = Mode::Unlock;
         self.status = "Vault locked. Encryption key cleared from memory.".into();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clear_text_input, delete_previous_word};
+
+    #[test]
+    fn delete_previous_word_handles_unicode_and_trailing_whitespace() {
+        let mut value = "alpha béta gamma   ".to_string();
+
+        delete_previous_word(&mut value);
+        assert_eq!(value, "alpha béta ");
+
+        delete_previous_word(&mut value);
+        assert_eq!(value, "alpha ");
+
+        delete_previous_word(&mut value);
+        assert_eq!(value, "");
+    }
+
+    #[test]
+    fn clear_text_input_removes_the_entire_value() {
+        let mut value = "remove everything".to_string();
+
+        clear_text_input(&mut value);
+
+        assert!(value.is_empty());
     }
 }

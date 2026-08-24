@@ -7,6 +7,10 @@ mod ui;
 use std::{error::Error, io, time::Duration};
 
 use app::App;
+#[cfg(target_os = "macos")]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::{
     event::{self, Event},
     execute,
@@ -17,13 +21,30 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
 
+    #[cfg(target_os = "macos")]
+    let keyboard_enhancement_enabled =
+        crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+
+    #[cfg(target_os = "macos")]
+    if keyboard_enhancement_enabled {
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let run_result = run_app(&mut terminal);
+
+    #[cfg(target_os = "macos")]
+    if keyboard_enhancement_enabled {
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    }
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
