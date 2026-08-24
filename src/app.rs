@@ -167,7 +167,14 @@ fn is_delete_word_shortcut(key: &KeyEvent) -> bool {
 
 #[cfg(not(target_os = "macos"))]
 fn is_delete_word_shortcut(key: &KeyEvent) -> bool {
-    key.code == KeyCode::Backspace && key.modifiers.contains(KeyModifiers::CONTROL)
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    (control
+        && matches!(
+            key.code,
+            KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Char('w')
+        ))
+        || matches!(key.code, KeyCode::Char('\u{8}') | KeyCode::Char('\u{17}'))
 }
 
 #[cfg(target_os = "macos")]
@@ -1023,7 +1030,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_text_input, delete_previous_word};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::{clear_text_input, delete_previous_word, is_delete_word_shortcut};
 
     #[test]
     fn delete_previous_word_handles_unicode_and_trailing_whitespace() {
@@ -1046,5 +1055,29 @@ mod tests {
         clear_text_input(&mut value);
 
         assert!(value.is_empty());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn delete_word_shortcut_accepts_common_terminal_encodings() {
+        let backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL);
+        let ctrl_h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
+        let ctrl_w = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        let raw_backspace = KeyEvent::new(KeyCode::Char('\u{8}'), KeyModifiers::NONE);
+        let raw_ctrl_w = KeyEvent::new(KeyCode::Char('\u{17}'), KeyModifiers::NONE);
+
+        assert!(is_delete_word_shortcut(&backspace));
+        assert!(is_delete_word_shortcut(&ctrl_h));
+        assert!(is_delete_word_shortcut(&ctrl_w));
+        assert!(is_delete_word_shortcut(&raw_backspace));
+        assert!(is_delete_word_shortcut(&raw_ctrl_w));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn delete_word_shortcut_does_not_capture_plain_backspace() {
+        let plain_backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+
+        assert!(!is_delete_word_shortcut(&plain_backspace));
     }
 }
