@@ -12,8 +12,9 @@ use crate::{
     clipboard::{CLIPBOARD_CLEAR_SECS, ClipboardManager},
     model::{PasswordEntry, Vault},
     storage::{
-        UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault, load_unlocked_vault,
-        prepare_vault_path, save_unlocked_vault,
+        UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault,
+        load_unlocked_vault_with_recovery, prepare_vault_path, save_unlocked_vault,
+        vault_or_backup_exists,
     },
 };
 
@@ -280,7 +281,7 @@ impl App {
             ),
         };
 
-        let (mode, base_status) = if vault_path.exists() {
+        let (mode, base_status) = if vault_or_backup_exists(&vault_path) {
             (
                 Mode::Unlock,
                 "Encrypted vault found. Enter the master password.".to_string(),
@@ -1090,8 +1091,11 @@ impl App {
             }
         };
 
-        match load_unlocked_vault(&self.vault_path, self.input.as_str()) {
-            Ok(mut unlocked) => {
+        match load_unlocked_vault_with_recovery(&self.vault_path, self.input.as_str()) {
+            Ok(loaded) => {
+                let recovered_from_backup = loaded.recovered_from_backup;
+                let backup_warning = loaded.backup_warning;
+                let mut unlocked = loaded.vault;
                 let purge_result = self.purge_expired_deleted_entries(&mut unlocked);
 
                 self.vault = Some(unlocked);
@@ -1102,15 +1106,28 @@ impl App {
                 self.pending_password.zeroize();
 
                 self.mode = Mode::Vault;
-                self.status = match purge_result {
-                    Ok(0) => "Vault unlocked successfully.".into(),
-                    Ok(count) => format!(
-                        "Vault unlocked. Automatically purged {count} expired item(s) from Recently Deleted."
-                    ),
-                    Err(error) => {
-                        format!("Vault unlocked, but automatic purge failed safely: {error}")
-                    }
+                let mut status = if recovered_from_backup {
+                    "Primary vault was damaged or missing. Restored the verified encrypted backup and unlocked it."
+                        .to_string()
+                } else {
+                    "Vault unlocked successfully.".to_string()
                 };
+
+                match purge_result {
+                    Ok(0) => {}
+                    Ok(count) => status.push_str(&format!(
+                        " Automatically purged {count} expired item(s) from Recently Deleted."
+                    )),
+                    Err(error) => {
+                        status.push_str(&format!(" Automatic purge failed safely: {error}"))
+                    }
+                }
+
+                if let Some(warning) = backup_warning {
+                    status.push_str(&format!(" Backup warning: {warning}"));
+                }
+
+                self.status = status;
             }
             Err(_) => {
                 self.input.zeroize();

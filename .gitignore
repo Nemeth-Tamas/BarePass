@@ -3,7 +3,9 @@
 # Local BarePass vaults must never be staged accidentally.
 *.vault
 *.vault.lock
+*.vault.bak
 *.vault.tmp
+*.bak.tmp
 
 # Editor / OS debris.
 .DS_Store

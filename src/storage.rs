@@ -24,6 +24,12 @@ pub(crate) struct VaultLock {
     _file: fs::File,
 }
 
+pub(crate) struct VaultLoad {
+    pub(crate) vault: UnlockedVault,
+    pub(crate) recovered_from_backup: bool,
+    pub(crate) backup_warning: Option<String>,
+}
+
 pub(crate) struct UnlockedVault {
     data: Vault,
     key: VaultKey,
@@ -79,11 +85,21 @@ fn vault_lock_path(path: &Path) -> PathBuf {
     PathBuf::from(lock_path)
 }
 
+fn vault_backup_path(path: &Path) -> PathBuf {
+    let mut backup_path = path.as_os_str().to_os_string();
+    backup_path.push(".bak");
+    PathBuf::from(backup_path)
+}
+
+pub(crate) fn vault_or_backup_exists(path: &Path) -> bool {
+    path.exists() || vault_backup_path(path).exists()
+}
+
 pub(crate) fn prepare_vault_path() -> Result<(PathBuf, Option<String>), String> {
     let native_path = native_vault_path()?;
     let legacy_path = PathBuf::from("barepass.vault");
 
-    if native_path.exists() || !legacy_path.exists() {
+    if vault_or_backup_exists(&native_path) || !legacy_path.exists() {
         return Ok((native_path, None));
     }
 
@@ -161,6 +177,7 @@ fn migrate_legacy_vault(legacy_path: &Path, native_path: &Path) -> Result<String
         )
     })?;
 
+    atomic_write_bytes(&vault_backup_path(native_path), &encrypted)?;
     atomic_write_bytes(native_path, &encrypted)?;
 
     let removal_warning = match fs::remove_file(legacy_path) {
@@ -205,7 +222,59 @@ pub(crate) fn create_unlocked_vault(
 pub(crate) fn save_unlocked_vault(path: &Path, vault: &UnlockedVault) -> Result<(), String> {
     let encrypted = encrypt_unlocked_vault(vault)?;
 
+    prepare_backup_before_save(path, vault, &encrypted)?;
     atomic_write_bytes(path, &encrypted)
+}
+
+fn prepare_backup_before_save(
+    path: &Path,
+    vault: &UnlockedVault,
+    replacement: &[u8],
+) -> Result<(), String> {
+    let backup_path = vault_backup_path(path);
+
+    if !path.exists() {
+        return atomic_write_bytes(&backup_path, replacement);
+    }
+
+    let current = fs::read(path)
+        .map_err(|error| format!("could not read {} before backup: {error}", path.display()))?;
+
+    if encrypted_blob_matches_unlocked_vault(&current, vault) {
+        return atomic_write_bytes(&backup_path, &current);
+    }
+
+    let backup_is_valid = fs::read(&backup_path)
+        .ok()
+        .is_some_and(|backup| encrypted_blob_matches_unlocked_vault(&backup, vault));
+
+    if backup_is_valid {
+        return Ok(());
+    }
+
+    atomic_write_bytes(&backup_path, replacement)
+}
+
+fn ensure_valid_backup(path: &Path, vault: &UnlockedVault) -> Result<(), String> {
+    let backup_path = vault_backup_path(path);
+
+    let backup_is_valid = fs::read(&backup_path)
+        .ok()
+        .is_some_and(|backup| encrypted_blob_matches_unlocked_vault(&backup, vault));
+
+    if backup_is_valid {
+        return Ok(());
+    }
+
+    let primary = fs::read(path)
+        .map_err(|error| format!("could not read {} for backup: {error}", path.display()))?;
+
+    atomic_write_bytes(&backup_path, &primary).map_err(|error| {
+        format!(
+            "could not create or refresh encrypted backup {}: {error}",
+            backup_path.display()
+        )
+    })
 }
 
 fn atomic_write_bytes(path: &Path, encrypted: &[u8]) -> Result<(), String> {
@@ -320,6 +389,48 @@ pub(crate) fn load_unlocked_vault(
     decrypt_vault_blob(&encrypted, master_password)
 }
 
+pub(crate) fn load_unlocked_vault_with_recovery(
+    path: &Path,
+    master_password: &str,
+) -> Result<VaultLoad, String> {
+    match load_unlocked_vault(path, master_password) {
+        Ok(vault) => {
+            let backup_warning = ensure_valid_backup(path, &vault).err();
+
+            Ok(VaultLoad {
+                vault,
+                recovered_from_backup: false,
+                backup_warning,
+            })
+        }
+        Err(primary_error) => {
+            let backup_path = vault_backup_path(path);
+            let vault =
+                load_unlocked_vault(&backup_path, master_password).map_err(|_| primary_error)?;
+
+            let encrypted_backup = fs::read(&backup_path).map_err(|error| {
+                format!(
+                    "verified backup {} could not be read for recovery: {error}",
+                    backup_path.display()
+                )
+            })?;
+
+            atomic_write_bytes(path, &encrypted_backup).map_err(|error| {
+                format!(
+                    "verified backup was available, but {} could not be restored: {error}",
+                    path.display()
+                )
+            })?;
+
+            Ok(VaultLoad {
+                vault,
+                recovered_from_backup: true,
+                backup_warning: None,
+            })
+        }
+    }
+}
+
 fn encrypt_unlocked_vault(vault: &UnlockedVault) -> Result<Vec<u8>, String> {
     let nonce = random_nonce()?;
     let header = build_header(vault.kdf, &vault.salt, &nonce);
@@ -368,6 +479,38 @@ fn decrypt_vault_blob(encrypted: &[u8], master_password: &str) -> Result<Unlocke
         kdf,
         salt,
     })
+}
+
+fn encrypted_blob_matches_unlocked_vault(encrypted: &[u8], vault: &UnlockedVault) -> bool {
+    if encrypted.len() < HEADER_LEN + MIN_CIPHERTEXT_LEN {
+        return false;
+    }
+
+    let Ok((kdf, salt, nonce)) = parse_header(encrypted) else {
+        return false;
+    };
+
+    if kdf.memory_kib != vault.kdf.memory_kib
+        || kdf.iterations != vault.kdf.iterations
+        || kdf.parallelism != vault.kdf.parallelism
+        || salt != vault.salt
+    {
+        return false;
+    }
+
+    let Ok(mut plaintext) = decrypt(
+        &vault.key,
+        &nonce,
+        &encrypted[HEADER_LEN..],
+        &encrypted[..HEADER_LEN],
+    ) else {
+        return false;
+    };
+
+    let valid = serde_json::from_slice::<Vault>(&plaintext).is_ok();
+    plaintext.zeroize();
+
+    valid
 }
 
 fn build_header(kdf: KdfConfig, salt: &[u8; SALT_LEN], nonce: &[u8; NONCE_LEN]) -> Vec<u8> {
@@ -531,6 +674,7 @@ mod tests {
         let legacy_path = root.join("barepass.vault");
         let native_directory = root.join("native");
         let native_path = native_directory.join("barepass.vault");
+        let native_backup_path = vault_backup_path(&native_path);
         let encrypted = b"already encrypted legacy vault bytes";
 
         fs::create_dir_all(&native_directory).unwrap();
@@ -539,10 +683,12 @@ mod tests {
         let notice = migrate_legacy_vault(&legacy_path, &native_path).unwrap();
 
         assert_eq!(fs::read(&native_path).unwrap(), encrypted);
+        assert_eq!(fs::read(&native_backup_path).unwrap(), encrypted);
         assert!(!legacy_path.exists());
         assert!(notice.contains("Migrated encrypted vault"));
 
         fs::remove_file(&native_path).unwrap();
+        fs::remove_file(&native_backup_path).unwrap();
         fs::remove_file(vault_lock_path(&native_path)).unwrap();
         fs::remove_dir(&native_directory).unwrap();
         fs::remove_dir(&root).unwrap();
@@ -582,6 +728,131 @@ mod tests {
     }
 
     #[test]
+    fn first_save_creates_an_encrypted_recovery_backup() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let path = std::env::temp_dir().join(format!(
+            "barepass-first-backup-{}-{unique}.vault",
+            std::process::id()
+        ));
+        let backup_path = vault_backup_path(&path);
+        let unlocked = create_unlocked_vault(sample_vault(), MASTER_PASSWORD).unwrap();
+
+        save_unlocked_vault(&path, &unlocked).unwrap();
+
+        let primary = load_unlocked_vault(&path, MASTER_PASSWORD).unwrap();
+        let backup = load_unlocked_vault(&backup_path, MASTER_PASSWORD).unwrap();
+
+        assert_eq!(primary.data, sample_vault());
+        assert_eq!(backup.data, sample_vault());
+
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(&backup_path).unwrap();
+    }
+
+    #[test]
+    fn later_save_keeps_the_previous_authenticated_primary_as_backup() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let path = std::env::temp_dir().join(format!(
+            "barepass-previous-backup-{}-{unique}.vault",
+            std::process::id()
+        ));
+        let backup_path = vault_backup_path(&path);
+        let mut unlocked = create_unlocked_vault(sample_vault(), MASTER_PASSWORD).unwrap();
+
+        save_unlocked_vault(&path, &unlocked).unwrap();
+
+        unlocked
+            .data_mut()
+            .update_password_entry(
+                1,
+                "Updated GitHub".into(),
+                "new-user@example.test".into(),
+                "new-secret".into(),
+                "https://github.com/new".into(),
+                "updated notes".into(),
+            )
+            .unwrap();
+
+        save_unlocked_vault(&path, &unlocked).unwrap();
+
+        let primary = load_unlocked_vault(&path, MASTER_PASSWORD).unwrap();
+        let backup = load_unlocked_vault(&backup_path, MASTER_PASSWORD).unwrap();
+
+        assert_eq!(primary.data.entries[0].title, "Updated GitHub");
+        assert_eq!(backup.data.entries[0].title, "GitHub");
+        assert_eq!(backup.data.entries[0].password, "very-secret-password");
+
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(&backup_path).unwrap();
+    }
+
+    #[test]
+    fn verified_backup_recovers_a_damaged_primary() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let path = std::env::temp_dir().join(format!(
+            "barepass-damaged-recovery-{}-{unique}.vault",
+            std::process::id()
+        ));
+        let backup_path = vault_backup_path(&path);
+        let unlocked = create_unlocked_vault(sample_vault(), MASTER_PASSWORD).unwrap();
+
+        save_unlocked_vault(&path, &unlocked).unwrap();
+        fs::write(&path, b"damaged primary vault").unwrap();
+
+        let recovered = load_unlocked_vault_with_recovery(&path, MASTER_PASSWORD).unwrap();
+
+        assert!(recovered.recovered_from_backup);
+        assert_eq!(recovered.vault.data, sample_vault());
+
+        let restored_primary = load_unlocked_vault(&path, MASTER_PASSWORD).unwrap();
+        assert_eq!(restored_primary.data, sample_vault());
+
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(&backup_path).unwrap();
+    }
+
+    #[test]
+    fn verified_backup_recovers_a_missing_primary() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let path = std::env::temp_dir().join(format!(
+            "barepass-missing-recovery-{}-{unique}.vault",
+            std::process::id()
+        ));
+        let backup_path = vault_backup_path(&path);
+        let unlocked = create_unlocked_vault(sample_vault(), MASTER_PASSWORD).unwrap();
+
+        save_unlocked_vault(&path, &unlocked).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert!(vault_or_backup_exists(&path));
+
+        let recovered = load_unlocked_vault_with_recovery(&path, MASTER_PASSWORD).unwrap();
+
+        assert!(recovered.recovered_from_backup);
+        assert!(path.exists());
+        assert_eq!(recovered.vault.data, sample_vault());
+
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(&backup_path).unwrap();
+    }
+
+    #[test]
     fn delete_restore_save_reopen_recovery_round_trip() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -592,6 +863,7 @@ mod tests {
             "barepass-recovery-{}-{unique}.vault",
             std::process::id()
         ));
+        let backup_path = vault_backup_path(&path);
 
         let result = (|| -> Result<(), String> {
             let mut unlocked = create_unlocked_vault(sample_vault(), MASTER_PASSWORD)?;
@@ -625,6 +897,7 @@ mod tests {
         })();
 
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&backup_path);
 
         result.unwrap();
     }

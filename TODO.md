@@ -77,7 +77,7 @@ This is a pre-1.0 core requirement, not an optional stretch goal.
 * [x] Add configurable automatic purge age.
 * [x] Ensure ordinary accidental deletion cannot permanently destroy vault data.
 * [x] Add recovery tests covering delete → restore → save → reopen.
-* [ ] Design safe backup/recovery behavior for damaged or interrupted vault writes.
+* [x] Design safe backup/recovery behavior for damaged or interrupted vault writes.
 
 ## Phase 3 — password tooling
 
