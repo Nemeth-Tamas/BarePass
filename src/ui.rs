@@ -22,6 +22,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
 
     match app.mode() {
         Mode::Vault => draw_vault(frame, app, chunks[1]),
+        Mode::RecentlyDeleted => draw_recently_deleted(frame, app, chunks[1]),
         Mode::AddEntry | Mode::EditEntry => {
             draw_vault(frame, app, chunks[1]);
             draw_entry_form(frame, app, chunks[1]);
@@ -88,7 +89,11 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
             " Unlock BarePass ",
             "Enter your master password to decrypt the local vault.",
         ),
-        Mode::Vault | Mode::AddEntry | Mode::EditEntry | Mode::ConfirmDelete => return,
+        Mode::Vault
+        | Mode::AddEntry
+        | Mode::EditEntry
+        | Mode::ConfirmDelete
+        | Mode::RecentlyDeleted => return,
     };
 
     let outer = Block::default()
@@ -142,7 +147,11 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Create => "Minimum 12 characters  •  Enter continue  •  Esc quit",
         Mode::Confirm => "Enter create vault  •  Esc start over",
         Mode::Unlock => "Enter unlock  •  Esc quit",
-        Mode::Vault | Mode::AddEntry | Mode::EditEntry | Mode::ConfirmDelete => "",
+        Mode::Vault
+        | Mode::AddEntry
+        | Mode::EditEntry
+        | Mode::ConfirmDelete
+        | Mode::RecentlyDeleted => "",
     };
 
     frame.render_widget(
@@ -310,6 +319,154 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(details, columns[1]);
 }
 
+fn draw_recently_deleted(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(unlocked) = app.vault() else {
+        return;
+    };
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(area);
+
+    let deleted_entries: Vec<_> = unlocked
+        .data()
+        .entries
+        .iter()
+        .filter(|entry| entry.deleted_unix.is_some())
+        .collect();
+
+    let list_lines = if deleted_entries.is_empty() {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Recently Deleted is empty.",
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::ITALIC),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Nothing needs rescuing. Nice.",
+                Style::default().fg(Color::Green),
+            )),
+        ]
+    } else {
+        deleted_entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let selected = index == app.deleted_selected_index();
+                let marker = if selected { " > " } else { "   " };
+
+                let style = if selected {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+
+                Line::from(vec![
+                    Span::styled(marker, Style::default().fg(Color::Red)),
+                    Span::styled(format!("#{}  {}", entry.id, entry.title), style),
+                ])
+            })
+            .collect()
+    };
+
+    let list = Paragraph::new(list_lines)
+        .block(
+            Block::default()
+                .title(format!(
+                    " Recently Deleted  {} item(s) ",
+                    deleted_entries.len()
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red)),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(list, columns[0]);
+
+    let details = if let Some(entry) = app.selected_deleted_entry() {
+        let deleted_at = entry
+            .deleted_unix
+            .map(format_unix_timestamp)
+            .unwrap_or_else(|| "Unknown".into());
+
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "RECOVERABLE ITEM",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Title       ", Style::default().fg(Color::DarkGray)),
+                Span::styled(entry.title.as_str(), Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Username    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(entry.username.as_str(), Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Password    ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "•".repeat(entry.password.chars().count()),
+                    Style::default().fg(Color::Magenta),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("URL         ", Style::default().fg(Color::DarkGray)),
+                Span::styled(entry.url.as_str(), Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::styled("Deleted     ", Style::default().fg(Color::DarkGray)),
+                Span::styled(deleted_at, Style::default().fg(Color::Red)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Notes       ", Style::default().fg(Color::DarkGray)),
+                Span::styled(entry.notes.as_str(), Style::default().fg(Color::Gray)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press r to restore this item.",
+                Style::default().fg(Color::Green),
+            )),
+        ]
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "NO DELETED ITEMS",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Deleted passwords will remain encrypted here",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "until explicitly restored or permanently removed.",
+                Style::default().fg(Color::Gray),
+            )),
+        ]
+    };
+
+    let details = Paragraph::new(details)
+        .block(
+            Block::default()
+                .title(" Recovery details ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red)),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(details, columns[1]);
+}
+
 fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
     let popup = centered_rect(76, 23, area);
 
@@ -324,7 +481,12 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
             " Edit password ",
             "Update the selected login entry. Its vault ID will stay the same.",
         ),
-        Mode::Create | Mode::Confirm | Mode::Unlock | Mode::Vault | Mode::ConfirmDelete => return,
+        Mode::Create
+        | Mode::Confirm
+        | Mode::Unlock
+        | Mode::Vault
+        | Mode::ConfirmDelete
+        | Mode::RecentlyDeleted => return,
     };
 
     let outer = Block::default()
@@ -466,7 +628,8 @@ fn draw_delete_confirmation(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.mode() {
-        Mode::Vault => "  a Add   e Edit   d Delete   ↑↓/jk Select   l Lock   q Quit",
+        Mode::Vault => "  a Add   e Edit   d Delete   Tab Deleted   ↑↓/jk Select   l Lock   q Quit",
+        Mode::RecentlyDeleted => "  r Restore   Tab/Esc Active   ↑↓/jk Select   l Lock   q Quit",
         Mode::AddEntry | Mode::EditEntry => {
             "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel"
         }
@@ -488,6 +651,48 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     frame.render_widget(footer, area);
+}
+
+fn format_unix_timestamp(timestamp: u64) -> String {
+    let days_since_epoch = match i64::try_from(timestamp / 86_400) {
+        Ok(days) => days,
+        Err(_) => return format!("{timestamp} Unix seconds"),
+    };
+
+    let seconds_of_day = timestamp % 86_400;
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+
+    let (year, month, day) = civil_from_days(days_since_epoch);
+
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
+    let adjusted = days_since_unix_epoch + 719_468;
+    let era = if adjusted >= 0 {
+        adjusted
+    } else {
+        adjusted - 146_096
+    } / 146_097;
+
+    let day_of_era = adjusted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+
+    if month <= 2 {
+        year += 1;
+    }
+
+    (year, month as u32, day as u32)
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

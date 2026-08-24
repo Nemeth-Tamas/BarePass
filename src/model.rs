@@ -101,6 +101,21 @@ impl Vault {
 
         Ok(deleted_unix)
     }
+
+    pub(crate) fn restore_password_entry(&mut self, id: u64) -> Result<(), String> {
+        let restored_unix = now_unix();
+
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == id && entry.deleted_unix.is_some())
+            .ok_or_else(|| format!("deleted password entry #{id} was not found"))?;
+
+        entry.deleted_unix = None;
+        self.updated_unix = restored_unix;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -233,4 +233,52 @@ mod tests {
 
         assert!(decrypt_vault_blob(&encrypted, MASTER_PASSWORD).is_err());
     }
+
+    #[test]
+    fn delete_restore_save_reopen_recovery_round_trip() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let path = std::env::temp_dir().join(format!(
+            "barepass-recovery-{}-{unique}.vault",
+            std::process::id()
+        ));
+
+        let result = (|| -> Result<(), String> {
+            let mut unlocked = create_unlocked_vault(sample_vault(), MASTER_PASSWORD)?;
+
+            unlocked.data_mut().move_password_entry_to_deleted(1)?;
+            save_unlocked_vault(&path, &unlocked)?;
+
+            let mut reopened = load_unlocked_vault(&path, MASTER_PASSWORD)?;
+
+            let deleted = &reopened.data().entries[0];
+
+            assert!(deleted.deleted_unix.is_some());
+            assert_eq!(deleted.title, "GitHub");
+            assert_eq!(deleted.password, "very-secret-password");
+
+            reopened.data_mut().restore_password_entry(1)?;
+            save_unlocked_vault(&path, &reopened)?;
+
+            let restored = load_unlocked_vault(&path, MASTER_PASSWORD)?;
+            let entry = &restored.data().entries[0];
+
+            assert_eq!(entry.deleted_unix, None);
+            assert_eq!(entry.id, 1);
+            assert_eq!(entry.title, "GitHub");
+            assert_eq!(entry.username, "tamas@example.test");
+            assert_eq!(entry.password, "very-secret-password");
+            assert_eq!(entry.url, "https://github.com");
+            assert_eq!(entry.notes, "BarePass encrypted-vault round-trip test");
+
+            Ok(())
+        })();
+
+        let _ = std::fs::remove_file(&path);
+
+        result.unwrap();
+    }
 }
