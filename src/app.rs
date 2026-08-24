@@ -9,6 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
+    clipboard::{CLIPBOARD_CLEAR_SECS, ClipboardManager},
     model::{PasswordEntry, Vault},
     storage::{
         UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault, load_unlocked_vault,
@@ -240,6 +241,7 @@ pub(crate) struct App {
     status: String,
     search_query: Zeroizing<String>,
     search_editing: bool,
+    clipboard: Option<ClipboardManager>,
     auto_lock_timeout: Option<Duration>,
     last_activity: Instant,
     should_quit: bool,
@@ -294,6 +296,7 @@ impl App {
             status,
             search_query: Zeroizing::new(String::new()),
             search_editing: false,
+            clipboard: None,
             auto_lock_timeout,
             last_activity: Instant::now(),
             should_quit: false,
@@ -424,6 +427,16 @@ impl App {
     }
 
     pub(crate) fn handle_tick(&mut self) {
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            match clipboard.clear_if_due() {
+                Ok(true) => {
+                    self.status = "BarePass clipboard text cleared after 30 seconds.".into();
+                }
+                Ok(false) => {}
+                Err(error) => self.status = format!("Could not auto-clear clipboard: {error}"),
+            }
+        }
+
         if !inactivity_expired(
             self.vault.is_some(),
             self.auto_lock_timeout,
@@ -462,6 +475,8 @@ impl App {
             }
             KeyCode::Char('a') => self.open_add_entry(),
             KeyCode::Char('e') => self.open_edit_entry(),
+            KeyCode::Char('u') => self.copy_selected_username(),
+            KeyCode::Char('p') => self.copy_selected_password(),
             KeyCode::Char('d') => self.open_delete_confirmation(),
             KeyCode::Tab => self.open_recently_deleted(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection_up(),
@@ -526,6 +541,66 @@ impl App {
         self.search_editing = false;
         self.selected = 0;
         self.status = "Search cleared.".into();
+    }
+
+    fn copy_selected_username(&mut self) {
+        let username = match self.selected_entry() {
+            Some(entry) if !entry.username.is_empty() => Zeroizing::new(entry.username.clone()),
+            Some(_) => {
+                self.status = "The selected password entry has no username to copy.".into();
+                return;
+            }
+            None => {
+                self.status = "There is no password entry selected to copy from.".into();
+                return;
+            }
+        };
+
+        self.copy_text_to_clipboard(username.as_str(), "Username");
+    }
+
+    fn copy_selected_password(&mut self) {
+        let password = match self.selected_entry() {
+            Some(entry) if !entry.password.is_empty() => Zeroizing::new(entry.password.clone()),
+            Some(_) => {
+                self.status = "The selected password entry has no password to copy.".into();
+                return;
+            }
+            None => {
+                self.status = "There is no password entry selected to copy from.".into();
+                return;
+            }
+        };
+
+        self.copy_text_to_clipboard(password.as_str(), "Password");
+    }
+
+    fn copy_text_to_clipboard(&mut self, text: &str, label: &str) {
+        if self.clipboard.is_none() {
+            match ClipboardManager::new() {
+                Ok(clipboard) => self.clipboard = Some(clipboard),
+                Err(error) => {
+                    self.status = format!("Clipboard unavailable: {error}");
+                    return;
+                }
+            }
+        }
+
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            self.status = "Clipboard unavailable.".into();
+            return;
+        };
+
+        match clipboard.copy_text(text) {
+            Ok(()) => {
+                self.status = format!(
+                    "{label} copied. BarePass will clear it after {CLIPBOARD_CLEAR_SECS} seconds if the clipboard is unchanged."
+                );
+            }
+            Err(error) => {
+                self.status = format!("Could not copy {label}: {error}");
+            }
+        }
     }
 
     fn handle_recently_deleted_key(&mut self, key: KeyEvent) {
@@ -1329,6 +1404,10 @@ impl App {
     }
 
     fn lock_vault(&mut self) {
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            let _ = clipboard.clear_tracked_now();
+        }
+
         self.vault = None;
         self.vault_lock = None;
 

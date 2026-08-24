@@ -837,10 +837,10 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"
         }
         Mode::Vault if !app.search_query().is_empty() => {
-            "  / Edit search   Esc Clear   a Add   e Edit   d Delete   ↑↓/jk Select"
+            "  / Search   Esc Clear   u Copy user   p Copy pass   e Edit   d Delete   ↑↓ Select"
         }
         Mode::Vault => {
-            "  / Search   a Add   e Edit   d Delete   Tab Deleted   ↑↓/jk Select   l Lock   q Quit"
+            "  / Search   u Copy user   p Copy pass   a Add   e Edit   d Delete   Tab Deleted"
         }
         Mode::RecentlyDeleted => {
             "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"

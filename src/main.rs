@@ -1,4 +1,5 @@
 mod app;
+mod clipboard;
 mod crypto;
 mod model;
 mod storage;

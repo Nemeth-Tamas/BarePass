@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+arboard = { version = "3.6.1", default-features = false }
 argon2 = "0.5.3"
 chacha20poly1305 = "0.11.0"
 crossterm = "0.29.0"
