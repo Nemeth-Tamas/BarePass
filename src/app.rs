@@ -7,7 +7,7 @@ use crate::{
     model::{PasswordEntry, Vault},
     storage::{
         UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault, load_unlocked_vault,
-        save_unlocked_vault,
+        prepare_vault_path, save_unlocked_vault,
     },
 };
 
@@ -209,9 +209,19 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn new() -> Self {
-        let vault_path = PathBuf::from("barepass.vault");
+        let legacy_fallback = PathBuf::from("barepass.vault");
 
-        let (mode, status) = if vault_path.exists() {
+        let (vault_path, storage_notice) = match prepare_vault_path() {
+            Ok((path, notice)) => (path, notice),
+            Err(error) => (
+                legacy_fallback,
+                Some(format!(
+                    "OS-native vault storage setup failed; using the working directory: {error}"
+                )),
+            ),
+        };
+
+        let (mode, base_status) = if vault_path.exists() {
             (
                 Mode::Unlock,
                 "Encrypted vault found. Enter the master password.".to_string(),
@@ -221,6 +231,11 @@ impl App {
                 Mode::Create,
                 "No vault exists yet. Create a master password.".to_string(),
             )
+        };
+
+        let status = match storage_notice {
+            Some(notice) => format!("{notice} {base_status}"),
+            None => base_status,
         };
 
         Self {

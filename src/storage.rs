@@ -1,4 +1,5 @@
 use std::{
+    env,
     ffi::OsString,
     fs::{self, OpenOptions, TryLockError},
     io::Write,
@@ -51,6 +52,7 @@ pub(crate) fn acquire_vault_lock(path: &Path) -> Result<VaultLock, String> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&lock_path)
         .map_err(|error| {
             format!(
@@ -77,6 +79,114 @@ fn vault_lock_path(path: &Path) -> PathBuf {
     PathBuf::from(lock_path)
 }
 
+pub(crate) fn prepare_vault_path() -> Result<(PathBuf, Option<String>), String> {
+    let native_path = native_vault_path()?;
+    let legacy_path = PathBuf::from("barepass.vault");
+
+    if native_path.exists() || !legacy_path.exists() {
+        return Ok((native_path, None));
+    }
+
+    let notice = migrate_legacy_vault(&legacy_path, &native_path)?;
+
+    Ok((native_path, Some(notice)))
+}
+
+fn native_vault_path() -> Result<PathBuf, String> {
+    let base = native_data_directory()?;
+    let app_directory = base.join("BarePass");
+
+    fs::create_dir_all(&app_directory).map_err(|error| {
+        format!(
+            "could not create BarePass data directory {}: {error}",
+            app_directory.display()
+        )
+    })?;
+
+    Ok(app_directory.join("barepass.vault"))
+}
+
+#[cfg(target_os = "windows")]
+fn native_data_directory() -> Result<PathBuf, String> {
+    environment_path("LOCALAPPDATA")
+        .ok_or_else(|| "LOCALAPPDATA is not available for OS-native vault storage".into())
+}
+
+#[cfg(target_os = "macos")]
+fn native_data_directory() -> Result<PathBuf, String> {
+    let home = environment_path("HOME")
+        .ok_or_else(|| "HOME is not available for OS-native vault storage".to_string())?;
+
+    Ok(home.join("Library").join("Application Support"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn native_data_directory() -> Result<PathBuf, String> {
+    if let Some(data_home) = environment_path("XDG_DATA_HOME").filter(|path| path.is_absolute()) {
+        return Ok(data_home);
+    }
+
+    let home = environment_path("HOME")
+        .ok_or_else(|| "HOME is not available for OS-native vault storage".to_string())?;
+
+    Ok(home.join(".local").join("share"))
+}
+
+#[cfg(not(any(target_os = "windows", unix)))]
+fn native_data_directory() -> Result<PathBuf, String> {
+    Err("OS-native vault storage is not implemented for this platform".into())
+}
+
+fn environment_path(name: &str) -> Option<PathBuf> {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn migrate_legacy_vault(legacy_path: &Path, native_path: &Path) -> Result<String, String> {
+    let legacy_lock = acquire_vault_lock(legacy_path)?;
+    let _native_lock = acquire_vault_lock(native_path)?;
+
+    if native_path.exists() {
+        return Ok(format!(
+            "OS-native vault already exists at {}.",
+            native_path.display()
+        ));
+    }
+
+    let encrypted = fs::read(legacy_path).map_err(|error| {
+        format!(
+            "could not read legacy vault {} for migration: {error}",
+            legacy_path.display()
+        )
+    })?;
+
+    atomic_write_bytes(native_path, &encrypted)?;
+
+    let removal_warning = match fs::remove_file(legacy_path) {
+        Ok(()) => {
+            sync_parent_directory(legacy_path)?;
+            None
+        }
+        Err(error) => Some(format!(
+            " The encrypted legacy copy at {} could not be removed: {error}",
+            legacy_path.display()
+        )),
+    };
+
+    drop(legacy_lock);
+
+    if !legacy_path.exists() {
+        let _ = fs::remove_file(vault_lock_path(legacy_path));
+    }
+
+    Ok(format!(
+        "Migrated encrypted vault to {}.{}",
+        native_path.display(),
+        removal_warning.unwrap_or_default()
+    ))
+}
+
 pub(crate) fn create_unlocked_vault(
     data: Vault,
     master_password: &str,
@@ -95,7 +205,11 @@ pub(crate) fn create_unlocked_vault(
 pub(crate) fn save_unlocked_vault(path: &Path, vault: &UnlockedVault) -> Result<(), String> {
     let encrypted = encrypt_unlocked_vault(vault)?;
 
-    let temp_path = write_vault_temp(path, &encrypted)?;
+    atomic_write_bytes(path, &encrypted)
+}
+
+fn atomic_write_bytes(path: &Path, encrypted: &[u8]) -> Result<(), String> {
+    let temp_path = write_vault_temp(path, encrypted)?;
 
     let replace_result = replace_vault_file(path, &temp_path);
 
@@ -401,6 +515,37 @@ mod tests {
         drop(third);
 
         fs::remove_file(lock_path).unwrap();
+    }
+
+    #[test]
+    fn legacy_vault_migration_preserves_encrypted_bytes_and_removes_old_copy() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let root = std::env::temp_dir().join(format!(
+            "barepass-migration-{}-{unique}",
+            std::process::id()
+        ));
+        let legacy_path = root.join("barepass.vault");
+        let native_directory = root.join("native");
+        let native_path = native_directory.join("barepass.vault");
+        let encrypted = b"already encrypted legacy vault bytes";
+
+        fs::create_dir_all(&native_directory).unwrap();
+        fs::write(&legacy_path, encrypted).unwrap();
+
+        let notice = migrate_legacy_vault(&legacy_path, &native_path).unwrap();
+
+        assert_eq!(fs::read(&native_path).unwrap(), encrypted);
+        assert!(!legacy_path.exists());
+        assert!(notice.contains("Migrated encrypted vault"));
+
+        fs::remove_file(&native_path).unwrap();
+        fs::remove_file(vault_lock_path(&native_path)).unwrap();
+        fs::remove_dir(&native_directory).unwrap();
+        fs::remove_dir(&root).unwrap();
     }
 
     #[test]
