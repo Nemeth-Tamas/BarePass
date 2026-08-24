@@ -61,7 +61,7 @@
 * [x] Add crash-safe/atomic vault writes before normal CRUD is trusted.
 * [x] Protect against two BarePass processes modifying the same vault simultaneously.
 * [x] Move normal vault storage from the working directory to the OS-native application data location.
-* [ ] Improve terminal cleanup so panics/errors cannot leave the terminal stuck in raw mode.
+* [x] Improve terminal cleanup so panics/errors cannot leave the terminal stuck in raw mode.
 * [ ] Add automatic vault locking after configurable inactivity.
 * [ ] Audit in-memory lifetime of usernames, passwords, notes, clipboard buffers, and temporary UI strings.
 
