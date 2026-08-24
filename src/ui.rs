@@ -230,7 +230,8 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
 
                 Line::from(vec![
                     Span::styled(marker, Style::default().fg(Color::Cyan)),
-                    Span::styled(format!("#{}  {}", entry.id, entry.title), style),
+                    Span::styled(format!("#{}  ", entry.id), style),
+                    Span::styled(entry.title.as_str(), style),
                 ])
             })
             .collect()
@@ -386,7 +387,8 @@ fn draw_recently_deleted(frame: &mut Frame, app: &App, area: Rect) {
 
                 Line::from(vec![
                     Span::styled(marker, Style::default().fg(Color::Red)),
-                    Span::styled(format!("#{}  {}", entry.id, entry.title), style),
+                    Span::styled(format!("#{}  ", entry.id), style),
+                    Span::styled(entry.title.as_str(), style),
                 ])
             })
             .collect()
@@ -555,11 +557,11 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
         let value = app.add_form().value(field);
 
         let display = if field == AddField::Password {
-            "•".repeat(value.chars().count())
+            Line::from("•".repeat(value.chars().count()))
         } else if value.is_empty() {
-            " ".to_string()
+            Line::from(" ")
         } else {
-            value.to_string()
+            Line::from(value)
         };
 
         let selected = app.add_form().field() == field;
@@ -622,13 +624,17 @@ fn draw_delete_confirmation(frame: &mut Frame, app: &App, area: Rect) {
         .split(inner);
 
     frame.render_widget(
-        Paragraph::new(format!("Move \"{}\" out of the active vault?", entry.title))
-            .style(
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(Line::from(vec![
+            Span::raw("Move \""),
+            Span::raw(entry.title.as_str()),
+            Span::raw("\" out of the active vault?"),
+        ]))
+        .style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .wrap(Wrap { trim: true }),
         rows[0],
     );
 
@@ -675,13 +681,17 @@ fn draw_permanent_delete_confirmation(frame: &mut Frame, app: &App, area: Rect) 
         .split(inner);
 
     frame.render_widget(
-        Paragraph::new(format!("Permanently delete \"{}\"?", entry.title))
-            .style(
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(Line::from(vec![
+            Span::raw("Permanently delete \""),
+            Span::raw(entry.title.as_str()),
+            Span::raw("\"?"),
+        ]))
+        .style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .wrap(Wrap { trim: true }),
         rows[0],
     );
 

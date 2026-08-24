@@ -79,22 +79,22 @@ impl AddField {
 
 pub(crate) struct AddEntryForm {
     field: AddField,
-    title: String,
-    username: String,
+    title: Zeroizing<String>,
+    username: Zeroizing<String>,
     password: Zeroizing<String>,
-    url: String,
-    notes: String,
+    url: Zeroizing<String>,
+    notes: Zeroizing<String>,
 }
 
 impl AddEntryForm {
     fn new() -> Self {
         Self {
             field: AddField::Title,
-            title: String::new(),
-            username: String::new(),
+            title: Zeroizing::new(String::new()),
+            username: Zeroizing::new(String::new()),
             password: Zeroizing::new(String::new()),
-            url: String::new(),
-            notes: String::new(),
+            url: Zeroizing::new(String::new()),
+            notes: Zeroizing::new(String::new()),
         }
     }
 
@@ -114,11 +114,11 @@ impl AddEntryForm {
 
     pub(crate) fn value(&self, field: AddField) -> &str {
         match field {
-            AddField::Title => &self.title,
-            AddField::Username => &self.username,
+            AddField::Title => self.title.as_str(),
+            AddField::Username => self.username.as_str(),
             AddField::Password => self.password.as_str(),
-            AddField::Url => &self.url,
-            AddField::Notes => &self.notes,
+            AddField::Url => self.url.as_str(),
+            AddField::Notes => self.notes.as_str(),
         }
     }
 
@@ -154,16 +154,6 @@ impl AddEntryForm {
         self.notes.clear();
 
         self.field = AddField::Title;
-    }
-}
-
-impl Drop for AddEntryForm {
-    fn drop(&mut self) {
-        self.title.zeroize();
-        self.username.zeroize();
-        self.password.zeroize();
-        self.url.zeroize();
-        self.notes.zeroize();
     }
 }
 
@@ -844,11 +834,11 @@ impl App {
             return;
         }
 
-        let title = title.to_string();
-        let username = self.add_form.value(AddField::Username).to_string();
-        let password = self.add_form.value(AddField::Password).to_string();
-        let url = self.add_form.value(AddField::Url).to_string();
-        let notes = self.add_form.value(AddField::Notes).to_string();
+        let mut title = Zeroizing::new(title.to_string());
+        let mut username = Zeroizing::new(self.add_form.value(AddField::Username).to_string());
+        let mut password = Zeroizing::new(self.add_form.value(AddField::Password).to_string());
+        let mut url = Zeroizing::new(self.add_form.value(AddField::Url).to_string());
+        let mut notes = Zeroizing::new(self.add_form.value(AddField::Notes).to_string());
         let vault_path = self.vault_path.clone();
 
         let Some(vault) = self.vault.as_mut() else {
@@ -860,10 +850,13 @@ impl App {
 
         let previous_updated = vault.data().updated_unix;
 
-        let id = match vault
-            .data_mut()
-            .add_password_entry(title, username, password, url, notes)
-        {
+        let id = match vault.data_mut().add_password_entry(
+            std::mem::take(&mut *title),
+            std::mem::take(&mut *username),
+            std::mem::take(&mut *password),
+            std::mem::take(&mut *url),
+            std::mem::take(&mut *notes),
+        ) {
             Ok(id) => id,
             Err(error) => {
                 self.status = format!("Could not add password entry: {error}");
@@ -913,11 +906,11 @@ impl App {
             return;
         }
 
-        let title = title.to_string();
-        let username = self.add_form.value(AddField::Username).to_string();
-        let password = self.add_form.value(AddField::Password).to_string();
-        let url = self.add_form.value(AddField::Url).to_string();
-        let notes = self.add_form.value(AddField::Notes).to_string();
+        let mut title = Zeroizing::new(title.to_string());
+        let mut username = Zeroizing::new(self.add_form.value(AddField::Username).to_string());
+        let mut password = Zeroizing::new(self.add_form.value(AddField::Password).to_string());
+        let mut url = Zeroizing::new(self.add_form.value(AddField::Url).to_string());
+        let mut notes = Zeroizing::new(self.add_form.value(AddField::Notes).to_string());
         let vault_path = self.vault_path.clone();
 
         let Some(vault) = self.vault.as_mut() else {
@@ -948,10 +941,14 @@ impl App {
             )
         };
 
-        if let Err(error) = vault
-            .data_mut()
-            .update_password_entry(id, title, username, password, url, notes)
-        {
+        if let Err(error) = vault.data_mut().update_password_entry(
+            id,
+            std::mem::take(&mut *title),
+            std::mem::take(&mut *username),
+            std::mem::take(&mut *password),
+            std::mem::take(&mut *url),
+            std::mem::take(&mut *notes),
+        ) {
             self.status = format!("Could not update password entry: {error}");
             return;
         }

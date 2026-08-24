@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct Vault {
@@ -31,6 +31,12 @@ impl Vault {
         url: String,
         notes: String,
     ) -> Result<u64, String> {
+        let mut title = Zeroizing::new(title);
+        let mut username = Zeroizing::new(username);
+        let mut password = Zeroizing::new(password);
+        let mut url = Zeroizing::new(url);
+        let mut notes = Zeroizing::new(notes);
+
         let id = self
             .entries
             .iter()
@@ -42,11 +48,11 @@ impl Vault {
 
         self.entries.push(PasswordEntry {
             id,
-            title,
-            username,
-            password,
-            url,
-            notes,
+            title: std::mem::take(&mut *title),
+            username: std::mem::take(&mut *username),
+            password: std::mem::take(&mut *password),
+            url: std::mem::take(&mut *url),
+            notes: std::mem::take(&mut *notes),
             deleted_unix: None,
         });
 
@@ -64,6 +70,12 @@ impl Vault {
         url: String,
         notes: String,
     ) -> Result<(), String> {
+        let mut title = Zeroizing::new(title);
+        let mut username = Zeroizing::new(username);
+        let mut password = Zeroizing::new(password);
+        let mut url = Zeroizing::new(url);
+        let mut notes = Zeroizing::new(notes);
+
         let entry = self
             .entries
             .iter_mut()
@@ -76,11 +88,11 @@ impl Vault {
         entry.url.zeroize();
         entry.notes.zeroize();
 
-        entry.title = title;
-        entry.username = username;
-        entry.password = password;
-        entry.url = url;
-        entry.notes = notes;
+        entry.title = std::mem::take(&mut *title);
+        entry.username = std::mem::take(&mut *username);
+        entry.password = std::mem::take(&mut *password);
+        entry.url = std::mem::take(&mut *url);
+        entry.notes = std::mem::take(&mut *notes);
 
         self.updated_unix = now_unix();
 

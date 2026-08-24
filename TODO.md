@@ -63,7 +63,7 @@
 * [x] Move normal vault storage from the working directory to the OS-native application data location.
 * [x] Improve terminal cleanup so panics/errors cannot leave the terminal stuck in raw mode.
 * [x] Add automatic vault locking after configurable inactivity.
-* [ ] Audit in-memory lifetime of usernames, passwords, notes, clipboard buffers, and temporary UI strings.
+* [x] Audit in-memory lifetime of usernames, passwords, notes, clipboard buffers, and temporary UI strings.
 
 ## Phase 2 — Recently Deleted and recovery
 
