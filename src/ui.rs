@@ -26,6 +26,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             draw_vault(frame, app, chunks[1]);
             draw_entry_form(frame, app, chunks[1]);
         }
+        Mode::ConfirmDelete => {
+            draw_vault(frame, app, chunks[1]);
+            draw_delete_confirmation(frame, app, chunks[1]);
+        }
         Mode::Create | Mode::Confirm | Mode::Unlock => {
             draw_secret_screen(frame, app, chunks[1]);
         }
@@ -84,7 +88,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
             " Unlock BarePass ",
             "Enter your master password to decrypt the local vault.",
         ),
-        Mode::Vault | Mode::AddEntry | Mode::EditEntry => return,
+        Mode::Vault | Mode::AddEntry | Mode::EditEntry | Mode::ConfirmDelete => return,
     };
 
     let outer = Block::default()
@@ -138,7 +142,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Create => "Minimum 12 characters  •  Enter continue  •  Esc quit",
         Mode::Confirm => "Enter create vault  •  Esc start over",
         Mode::Unlock => "Enter unlock  •  Esc quit",
-        Mode::Vault | Mode::AddEntry | Mode::EditEntry => "",
+        Mode::Vault | Mode::AddEntry | Mode::EditEntry | Mode::ConfirmDelete => "",
     };
 
     frame.render_widget(
@@ -320,7 +324,7 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
             " Edit password ",
             "Update the selected login entry. Its vault ID will stay the same.",
         ),
-        Mode::Create | Mode::Confirm | Mode::Unlock | Mode::Vault => return,
+        Mode::Create | Mode::Confirm | Mode::Unlock | Mode::Vault | Mode::ConfirmDelete => return,
     };
 
     let outer = Block::default()
@@ -408,12 +412,65 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+fn draw_delete_confirmation(frame: &mut Frame, app: &App, area: Rect) {
+    let popup = centered_rect(66, 11, area);
+
+    frame.render_widget(Clear, popup);
+
+    let Some(entry) = app.selected_entry() else {
+        return;
+    };
+
+    let outer = Block::default()
+        .title(" Move to Recently Deleted ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let inner = outer.inner(popup);
+
+    frame.render_widget(outer, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Length(2),
+            Constraint::Min(1),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(format!("Move \"{}\" out of the active vault?", entry.title))
+            .style(
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .wrap(Wrap { trim: true }),
+        rows[0],
+    );
+
+    frame.render_widget(
+        Paragraph::new("The entry will remain encrypted and recoverable.")
+            .style(Style::default().fg(Color::Gray)),
+        rows[1],
+    );
+
+    frame.render_widget(
+        Paragraph::new("Enter / y  Confirm    Esc / n  Cancel")
+            .style(Style::default().fg(Color::DarkGray)),
+        rows[2],
+    );
+}
+
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.mode() {
-        Mode::Vault => "  a Add   e Edit   ↑↓/jk Select   l Lock   q Quit",
+        Mode::Vault => "  a Add   e Edit   d Delete   ↑↓/jk Select   l Lock   q Quit",
         Mode::AddEntry | Mode::EditEntry => {
             "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel"
         }
+        Mode::ConfirmDelete => "  Enter/y Confirm   Esc/n Cancel",
         Mode::Create | Mode::Confirm | Mode::Unlock => "  Enter Confirm   Esc Back/Quit",
     };
 

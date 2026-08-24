@@ -86,6 +86,21 @@ impl Vault {
 
         Ok(())
     }
+
+    pub(crate) fn move_password_entry_to_deleted(&mut self, id: u64) -> Result<u64, String> {
+        let deleted_unix = now_unix();
+
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == id && entry.deleted_unix.is_none())
+            .ok_or_else(|| format!("password entry #{id} was not found"))?;
+
+        entry.deleted_unix = Some(deleted_unix);
+        self.updated_unix = deleted_unix;
+
+        Ok(deleted_unix)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -194,5 +209,35 @@ mod tests {
         assert_eq!(entry.notes, "new notes");
         assert_eq!(entry.deleted_unix, None);
         assert!(vault.updated_unix > 0);
+    }
+
+    #[test]
+    fn deleting_password_entry_moves_it_to_recently_deleted_without_destroying_data() {
+        let mut vault = Vault::new();
+
+        let id = vault
+            .add_password_entry(
+                "Important account".into(),
+                "keep-this-user".into(),
+                "keep-this-password".into(),
+                "https://important.example".into(),
+                "keep these notes".into(),
+            )
+            .unwrap();
+
+        vault.updated_unix = 0;
+
+        let deleted_unix = vault.move_password_entry_to_deleted(id).unwrap();
+        let entry = &vault.entries[0];
+
+        assert_eq!(vault.entries.len(), 1);
+        assert_eq!(entry.id, id);
+        assert_eq!(entry.title, "Important account");
+        assert_eq!(entry.username, "keep-this-user");
+        assert_eq!(entry.password, "keep-this-password");
+        assert_eq!(entry.url, "https://important.example");
+        assert_eq!(entry.notes, "keep these notes");
+        assert_eq!(entry.deleted_unix, Some(deleted_unix));
+        assert_eq!(vault.updated_unix, deleted_unix);
     }
 }

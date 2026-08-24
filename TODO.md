@@ -46,7 +46,7 @@
 
 * [x] Add password/login entries from the TUI.
 * [x] Edit existing entries.
-* [ ] Delete entries through a confirmation dialog.
+* [x] Delete entries through a confirmation dialog.
 * [x] Build keyboard-navigable entry list.
 * [x] Build entry detail panel.
 * [ ] Search/filter entries live.
@@ -68,7 +68,7 @@
 
 This is a pre-1.0 core requirement, not an optional stretch goal.
 
-* [ ] Deleted entries move to Recently Deleted instead of being immediately destroyed.
+* [x] Deleted entries move to Recently Deleted instead of being immediately destroyed.
 * [ ] Show deletion timestamp.
 * [ ] Restore an item from Recently Deleted.
 * [ ] Permanently delete a selected item with an explicit confirmation.

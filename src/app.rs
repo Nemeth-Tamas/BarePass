@@ -16,6 +16,7 @@ pub(crate) enum Mode {
     Vault,
     AddEntry,
     EditEntry,
+    ConfirmDelete,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -237,6 +238,7 @@ impl App {
         match self.mode {
             Mode::Vault => self.handle_vault_key(key),
             Mode::AddEntry | Mode::EditEntry => self.handle_entry_form_key(key),
+            Mode::ConfirmDelete => self.handle_delete_confirmation_key(key),
             Mode::Create | Mode::Confirm | Mode::Unlock => {
                 self.handle_secret_key(key);
             }
@@ -249,8 +251,22 @@ impl App {
             KeyCode::Char('l') => self.lock_vault(),
             KeyCode::Char('a') => self.open_add_entry(),
             KeyCode::Char('e') => self.open_edit_entry(),
+            KeyCode::Char('d') => self.open_delete_confirmation(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection_down(),
+            _ => {}
+        }
+    }
+
+    fn handle_delete_confirmation_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.move_selected_entry_to_deleted();
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                self.mode = Mode::Vault;
+                self.status = "Delete cancelled.".into();
+            }
             _ => {}
         }
     }
@@ -312,6 +328,16 @@ impl App {
         self.editing_entry_id = None;
         self.mode = Mode::AddEntry;
         self.status = "Adding a new password entry.".into();
+    }
+
+    fn open_delete_confirmation(&mut self) {
+        let Some(entry_id) = self.selected_entry().map(|entry| entry.id) else {
+            self.status = "There is no password entry selected to delete.".into();
+            return;
+        };
+
+        self.mode = Mode::ConfirmDelete;
+        self.status = format!("Confirm moving password entry #{entry_id} to Recently Deleted.");
     }
 
     fn open_edit_entry(&mut self) {
@@ -394,7 +420,7 @@ impl App {
             Mode::Create => self.begin_confirmation(),
             Mode::Confirm => self.finish_creation(),
             Mode::Unlock => self.unlock_existing(),
-            Mode::Vault | Mode::AddEntry | Mode::EditEntry => {}
+            Mode::Vault | Mode::AddEntry | Mode::EditEntry | Mode::ConfirmDelete => {}
         }
     }
 
@@ -613,6 +639,65 @@ impl App {
         self.editing_entry_id = None;
         self.mode = Mode::Vault;
         self.status = format!("Password entry #{id} updated in the encrypted vault.");
+    }
+
+    fn move_selected_entry_to_deleted(&mut self) {
+        let Some(id) = self.selected_entry().map(|entry| entry.id) else {
+            self.mode = Mode::Vault;
+            self.status = "There is no password entry selected to delete.".into();
+            return;
+        };
+
+        let vault_path = self.vault_path.clone();
+
+        let Some(vault) = self.vault.as_mut() else {
+            self.mode = Mode::Unlock;
+            self.status = "Vault is no longer unlocked.".into();
+            return;
+        };
+
+        let previous_updated = vault.data().updated_unix;
+
+        let previous_deleted = vault
+            .data()
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.deleted_unix);
+
+        if let Err(error) = vault.data_mut().move_password_entry_to_deleted(id) {
+            self.mode = Mode::Vault;
+            self.status = format!("Could not delete password entry: {error}");
+            return;
+        }
+
+        if let Err(error) = save_unlocked_vault(&vault_path, vault) {
+            let data = vault.data_mut();
+
+            if let Some(entry) = data.entries.iter_mut().find(|entry| entry.id == id) {
+                entry.deleted_unix = previous_deleted;
+            }
+
+            data.updated_unix = previous_updated;
+
+            self.mode = Mode::Vault;
+            self.status = format!("Could not save deleted password entry: {error}");
+            return;
+        }
+
+        let active_count = vault
+            .data()
+            .entries
+            .iter()
+            .filter(|entry| entry.deleted_unix.is_none())
+            .count();
+
+        if self.selected >= active_count {
+            self.selected = active_count.saturating_sub(1);
+        }
+
+        self.mode = Mode::Vault;
+        self.status = format!("Password entry #{id} moved to Recently Deleted.");
     }
 
     fn lock_vault(&mut self) {
