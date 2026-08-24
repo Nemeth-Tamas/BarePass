@@ -17,6 +17,25 @@ pub(crate) enum CharacterSet {
     Symbols,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PasswordStrength {
+    Weak,
+    Fair,
+    Strong,
+    VeryStrong,
+}
+
+impl PasswordStrength {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Weak => "Weak",
+            Self::Fair => "Fair",
+            Self::Strong => "Strong",
+            Self::VeryStrong => "Very strong",
+        }
+    }
+}
+
 pub(crate) struct PasswordGenerator {
     length: usize,
     lowercase: bool,
@@ -79,6 +98,14 @@ impl PasswordGenerator {
         }
 
         length
+    }
+
+    pub(crate) fn entropy_bits(&self) -> f64 {
+        self.length as f64 * (self.alphabet_len() as f64).log2()
+    }
+
+    pub(crate) fn strength(&self) -> PasswordStrength {
+        classify_entropy(self.entropy_bits())
     }
 
     pub(crate) fn increase_length(&mut self) -> bool {
@@ -207,6 +234,18 @@ fn rejection_sample_index(byte: u8, alphabet_len: usize) -> Option<usize> {
     (value < acceptance_limit).then_some(value % alphabet_len)
 }
 
+fn classify_entropy(bits: f64) -> PasswordStrength {
+    if bits < 50.0 {
+        PasswordStrength::Weak
+    } else if bits < 80.0 {
+        PasswordStrength::Fair
+    } else if bits < 112.0 {
+        PasswordStrength::Strong
+    } else {
+        PasswordStrength::VeryStrong
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +296,24 @@ mod tests {
                 "alphabet length {alphabet_len} produced uneven buckets: {counts:?}"
             );
         }
+    }
+
+    #[test]
+    fn generated_password_entropy_matches_uniform_alphabet_math() {
+        let generator = PasswordGenerator::new();
+        let expected = DEFAULT_PASSWORD_LENGTH as f64 * (87_f64).log2();
+
+        assert!((generator.entropy_bits() - expected).abs() < 0.001);
+        assert_eq!(generator.strength(), PasswordStrength::VeryStrong);
+    }
+
+    #[test]
+    fn entropy_strength_thresholds_are_stable() {
+        assert_eq!(classify_entropy(49.99), PasswordStrength::Weak);
+        assert_eq!(classify_entropy(50.0), PasswordStrength::Fair);
+        assert_eq!(classify_entropy(79.99), PasswordStrength::Fair);
+        assert_eq!(classify_entropy(80.0), PasswordStrength::Strong);
+        assert_eq!(classify_entropy(111.99), PasswordStrength::Strong);
+        assert_eq!(classify_entropy(112.0), PasswordStrength::VeryStrong);
     }
 }

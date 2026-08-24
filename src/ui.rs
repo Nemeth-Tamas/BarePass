@@ -6,7 +6,10 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::{AddField, App, Mode};
+use crate::{
+    app::{AddField, App, Mode},
+    generator::PasswordStrength,
+};
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -230,13 +233,32 @@ fn draw_password_generator(frame: &mut Frame, app: &App, area: Rect) {
         rows[1],
     );
 
+    let strength = generator.strength();
+    let strength_color = match strength {
+        PasswordStrength::Weak => Color::Red,
+        PasswordStrength::Fair => Color::Yellow,
+        PasswordStrength::Strong => Color::Cyan,
+        PasswordStrength::VeryStrong => Color::Green,
+    };
+
     frame.render_widget(
-        Paragraph::new(format!(
-            "Length: {}   •   Allowed alphabet: {} characters",
-            generator.length(),
-            generator.alphabet_len()
-        ))
-        .style(Style::default().fg(Color::Cyan)),
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!(
+                    "Length: {}   •   Alphabet: {}   •   Entropy: {:.1} bits   •   ",
+                    generator.length(),
+                    generator.alphabet_len(),
+                    generator.entropy_bits()
+                ),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::styled(
+                strength.label(),
+                Style::default()
+                    .fg(strength_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
         rows[2],
     );
 
