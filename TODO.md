@@ -58,7 +58,7 @@
 * [x] Persist edits without retaining the master password.
 * [x] Update vault timestamps when contents change.
 * [x] Generate unique stable entry IDs.
-* [ ] Add crash-safe/atomic vault writes before normal CRUD is trusted.
+* [x] Add crash-safe/atomic vault writes before normal CRUD is trusted.
 * [ ] Protect against two BarePass processes modifying the same vault simultaneously.
 * [ ] Move normal vault storage from the working directory to the OS-native application data location.
 * [ ] Improve terminal cleanup so panics/errors cannot leave the terminal stuck in raw mode.

@@ -1,4 +1,9 @@
-use std::{fs, path::Path};
+use std::{
+    ffi::OsString,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use zeroize::Zeroize;
 
@@ -53,8 +58,105 @@ pub(crate) fn create_unlocked_vault(
 pub(crate) fn save_unlocked_vault(path: &Path, vault: &UnlockedVault) -> Result<(), String> {
     let encrypted = encrypt_unlocked_vault(vault)?;
 
-    fs::write(path, encrypted)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
+    let temp_path = write_vault_temp(path, &encrypted)?;
+
+    let replace_result = replace_vault_file(path, &temp_path);
+
+    if replace_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+
+    replace_result
+}
+
+fn write_vault_temp(path: &Path, encrypted: &[u8]) -> Result<PathBuf, String> {
+    let temp_path = atomic_temp_path(path)?;
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+
+        file.write_all(encrypted)?;
+        file.sync_all()?;
+
+        Ok(())
+    })();
+
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp_path);
+
+        return Err(format!(
+            "could not stage atomic vault write {}: {error}",
+            temp_path.display()
+        ));
+    }
+
+    Ok(temp_path)
+}
+
+fn replace_vault_file(path: &Path, temp_path: &Path) -> Result<(), String> {
+    fs::rename(temp_path, path).map_err(|error| {
+        format!(
+            "could not atomically replace {} with {}: {error}",
+            path.display(),
+            temp_path.display()
+        )
+    })?;
+
+    sync_parent_directory(path)
+}
+
+fn atomic_temp_path(path: &Path) -> Result<PathBuf, String> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let token = random_nonce()?;
+    let mut token_hex = String::with_capacity(24);
+
+    for byte in token.iter().take(12) {
+        token_hex.push(HEX[(byte >> 4) as usize] as char);
+        token_hex.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+
+    let stem = path
+        .file_stem()
+        .or_else(|| path.file_name())
+        .ok_or_else(|| format!("vault path {} has no file name", path.display()))?;
+
+    let mut temp_name = OsString::from(stem);
+    temp_name.push(format!(".{token_hex}"));
+
+    if let Some(extension) = path.extension() {
+        temp_name.push(".");
+        temp_name.push(extension);
+    }
+
+    temp_name.push(".tmp");
+
+    Ok(parent_directory(path).join(temp_name))
+}
+
+fn parent_directory(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> Result<(), String> {
+    let parent = parent_directory(path);
+    let directory = fs::File::open(parent)
+        .map_err(|error| format!("could not open {} for sync: {error}", parent.display()))?;
+
+    directory
+        .sync_all()
+        .map_err(|error| format!("could not sync {}: {error}", parent.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 pub(crate) fn load_unlocked_vault(
@@ -232,6 +334,39 @@ mod tests {
         encrypted[20] ^= 0x01;
 
         assert!(decrypt_vault_blob(&encrypted, MASTER_PASSWORD).is_err());
+    }
+
+    #[test]
+    fn staged_atomic_write_does_not_touch_existing_vault() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let path = std::env::temp_dir().join(format!(
+            "barepass-atomic-stage-{}-{unique}.vault",
+            std::process::id()
+        ));
+
+        let original = b"original vault bytes";
+        let replacement = b"replacement vault bytes";
+
+        fs::write(&path, original).unwrap();
+
+        let temp_path = write_vault_temp(&path, replacement).unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read(&temp_path).unwrap(), replacement);
+        assert_ne!(temp_path, path);
+        assert_eq!(
+            temp_path
+                .extension()
+                .and_then(|extension| extension.to_str()),
+            Some("tmp")
+        );
+
+        fs::remove_file(&temp_path).unwrap();
+        fs::remove_file(&path).unwrap();
     }
 
     #[test]
