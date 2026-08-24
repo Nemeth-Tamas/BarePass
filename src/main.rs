@@ -1,6 +1,7 @@
 mod app;
 mod clipboard;
 mod crypto;
+mod generator;
 mod model;
 mod storage;
 mod ui;

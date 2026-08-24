@@ -81,11 +81,11 @@ This is a pre-1.0 core requirement, not an optional stretch goal.
 
 ## Phase 3 — password tooling
 
-* [ ] Built-in password generator.
-* [ ] Allow password generation without creating or saving an entry.
-* [ ] Configurable password length.
-* [ ] Character-set controls.
-* [ ] Avoid biased random character selection.
+* [x] Built-in password generator.
+* [x] Allow password generation without creating or saving an entry.
+* [x] Configurable password length.
+* [x] Character-set controls.
+* [x] Avoid biased random character selection.
 * [ ] Password strength feedback.
 * [ ] Duplicate/reused-password analysis.
 * [ ] Weak-password analysis.

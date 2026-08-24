@@ -23,6 +23,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     match app.mode() {
         Mode::Vault => draw_vault(frame, app, chunks[1]),
         Mode::RecentlyDeleted => draw_recently_deleted(frame, app, chunks[1]),
+        Mode::Generator => draw_password_generator(frame, app, chunks[1]),
         Mode::AddEntry | Mode::EditEntry => {
             draw_vault(frame, app, chunks[1]);
             draw_entry_form(frame, app, chunks[1]);
@@ -101,7 +102,8 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         | Mode::AddEntry
         | Mode::EditEntry
         | Mode::ConfirmDelete
-        | Mode::RecentlyDeleted => return,
+        | Mode::RecentlyDeleted
+        | Mode::Generator => return,
     };
 
     let outer = Block::default()
@@ -159,12 +161,122 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         | Mode::AddEntry
         | Mode::EditEntry
         | Mode::ConfirmDelete
-        | Mode::RecentlyDeleted => "",
+        | Mode::RecentlyDeleted
+        | Mode::Generator => "",
     };
 
     frame.render_widget(
         Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
         rows[2],
+    );
+}
+
+fn draw_password_generator(frame: &mut Frame, app: &App, area: Rect) {
+    let popup = centered_rect(84, 23, area);
+
+    frame.render_widget(Clear, popup);
+
+    let generator = app.generator();
+    let outer = Block::default()
+        .title(" Password generator ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+    let inner = outer.inner(popup);
+
+    frame.render_widget(outer, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(5),
+            Constraint::Length(2),
+            Constraint::Length(5),
+            Constraint::Length(2),
+            Constraint::Min(1),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(
+            "Standalone CSPRNG password generation. Nothing is saved unless you explicitly copy it.",
+        )
+        .style(Style::default().fg(Color::Gray))
+        .wrap(Wrap { trim: true }),
+        rows[0],
+    );
+
+    frame.render_widget(
+        Paragraph::new(if generator.password().is_empty() {
+            Line::from(Span::styled(
+                "Generation failed — see status line.",
+                Style::default().fg(Color::Red),
+            ))
+        } else {
+            Line::from(Span::styled(
+                generator.password(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        })
+        .block(
+            Block::default()
+                .title(" Generated password ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .wrap(Wrap { trim: false }),
+        rows[1],
+    );
+
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Length: {}   •   Allowed alphabet: {} characters",
+            generator.length(),
+            generator.alphabet_len()
+        ))
+        .style(Style::default().fg(Color::Cyan)),
+        rows[2],
+    );
+
+    let toggle_line = |number: &str, label: &str, enabled: bool| {
+        Line::from(vec![
+            Span::styled(
+                format!("  [{number}] "),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(format!("{label:<10}"), Style::default().fg(Color::White)),
+            Span::styled(
+                if enabled { "ON" } else { "OFF" },
+                if enabled {
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+        ])
+    };
+
+    frame.render_widget(
+        Paragraph::new(vec![
+            toggle_line("1", "Lowercase", generator.lowercase_enabled()),
+            toggle_line("2", "Uppercase", generator.uppercase_enabled()),
+            toggle_line("3", "Digits", generator.digits_enabled()),
+            toggle_line("4", "Symbols", generator.symbols_enabled()),
+        ]),
+        rows[3],
+    );
+
+    frame.render_widget(
+        Paragraph::new(
+            "←/→ length   •   1–4 toggle character sets   •   r regenerate   •   c secure copy",
+        )
+        .style(Style::default().fg(Color::DarkGray))
+        .wrap(Wrap { trim: true }),
+        rows[4],
     );
 }
 
@@ -572,7 +684,8 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
         | Mode::Unlock
         | Mode::Vault
         | Mode::ConfirmDelete
-        | Mode::RecentlyDeleted => return,
+        | Mode::RecentlyDeleted
+        | Mode::Generator => return,
     };
 
     let outer = Block::default()
@@ -861,10 +974,10 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"
         }
         Mode::Vault if !app.search_query().is_empty() => {
-            "  / Search   Esc Clear   u Copy user   p Copy pass   v Reveal/hide   e Edit   d Delete"
+            "  / Search   Esc Clear   g Generate   u Copy user   p Copy pass   v Reveal/hide   e Edit"
         }
         Mode::Vault => {
-            "  / Search   u Copy user   p Copy pass   v Reveal/hide   a Add   e Edit   d Delete"
+            "  / Search   g Generate   u Copy user   p Copy pass   v Reveal/hide   a Add   e Edit"
         }
         Mode::RecentlyDeleted => {
             "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"
@@ -872,6 +985,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::AddEntry | Mode::EditEntry => {
             "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel"
         }
+        Mode::Generator => "  ←/→ Length   1-4 Sets   r Regenerate   c Copy   Esc Vault",
         Mode::ConfirmDelete => {
             if app.is_empty_recently_deleted_confirmation() {
                 "  Enter/y Empty forever   Esc/n Cancel"

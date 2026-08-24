@@ -10,6 +10,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     clipboard::{CLIPBOARD_CLEAR_SECS, ClipboardManager},
+    generator::{CharacterSet, PasswordGenerator},
     model::{PasswordEntry, Vault},
     storage::{
         UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault,
@@ -81,6 +82,7 @@ pub(crate) enum Mode {
     EditEntry,
     ConfirmDelete,
     RecentlyDeleted,
+    Generator,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -259,6 +261,7 @@ pub(crate) struct App {
     clipboard: Option<ClipboardManager>,
     revealed_password_entry_id: Option<u64>,
     auto_purge_days: Option<u64>,
+    generator: PasswordGenerator,
     auto_lock_timeout: Option<Duration>,
     last_activity: Instant,
     should_quit: bool,
@@ -317,6 +320,7 @@ impl App {
             clipboard: None,
             revealed_password_entry_id: None,
             auto_purge_days,
+            generator: PasswordGenerator::new(),
             auto_lock_timeout,
             last_activity: Instant::now(),
             should_quit: false,
@@ -426,6 +430,10 @@ impl App {
         self.auto_purge_days
     }
 
+    pub(crate) fn generator(&self) -> &PasswordGenerator {
+        &self.generator
+    }
+
     pub(crate) fn auto_lock_seconds(&self) -> Option<u64> {
         self.auto_lock_timeout.map(|timeout| timeout.as_secs())
     }
@@ -451,6 +459,7 @@ impl App {
             Mode::RecentlyDeleted => self.handle_recently_deleted_key(key),
             Mode::AddEntry | Mode::EditEntry => self.handle_entry_form_key(key),
             Mode::ConfirmDelete => self.handle_delete_confirmation_key(key),
+            Mode::Generator => self.handle_generator_key(key),
             Mode::Create | Mode::Confirm | Mode::Unlock => {
                 self.handle_secret_key(key);
             }
@@ -511,6 +520,7 @@ impl App {
             KeyCode::Char('p') => self.copy_selected_password(),
             KeyCode::Char('v') => self.toggle_selected_password_reveal(),
             KeyCode::Char('d') => self.open_delete_confirmation(),
+            KeyCode::Char('g') => self.open_generator(),
             KeyCode::Tab => self.open_recently_deleted(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection_down(),
@@ -667,6 +677,105 @@ impl App {
         }
     }
 
+    fn open_generator(&mut self) {
+        self.revealed_password_entry_id = None;
+        self.generator.clear_password();
+        self.mode = Mode::Generator;
+
+        match self.generator.regenerate() {
+            Ok(()) => {
+                self.status = format!(
+                    "Generated a {}-character password from {} allowed characters.",
+                    self.generator.length(),
+                    self.generator.alphabet_len()
+                );
+            }
+            Err(error) => {
+                self.status = format!("Could not generate password: {error}");
+            }
+        }
+    }
+
+    fn handle_generator_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.generator.clear_password();
+                self.mode = Mode::Vault;
+                self.status =
+                    "Password generator closed. Generated password cleared from memory.".into();
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.regenerate_password("Generated a new password.");
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => self.copy_generated_password(),
+            KeyCode::Left | KeyCode::Char('-') => {
+                if self.generator.decrease_length() {
+                    self.regenerate_password("Password length decreased.");
+                } else {
+                    self.status = format!(
+                        "Minimum generated password length is {} characters.",
+                        crate::generator::MIN_PASSWORD_LENGTH
+                    );
+                }
+            }
+            KeyCode::Right | KeyCode::Char('+') | KeyCode::Char('=') => {
+                if self.generator.increase_length() {
+                    self.regenerate_password("Password length increased.");
+                } else {
+                    self.status = format!(
+                        "Maximum generated password length is {} characters.",
+                        crate::generator::MAX_PASSWORD_LENGTH
+                    );
+                }
+            }
+            KeyCode::Char('1') => {
+                self.toggle_generator_set(CharacterSet::Lowercase, "Lowercase");
+            }
+            KeyCode::Char('2') => {
+                self.toggle_generator_set(CharacterSet::Uppercase, "Uppercase");
+            }
+            KeyCode::Char('3') => {
+                self.toggle_generator_set(CharacterSet::Digits, "Digits");
+            }
+            KeyCode::Char('4') => {
+                self.toggle_generator_set(CharacterSet::Symbols, "Symbols");
+            }
+            _ => {}
+        }
+    }
+
+    fn toggle_generator_set(&mut self, set: CharacterSet, label: &str) {
+        match self.generator.toggle(set) {
+            Ok(()) => self.regenerate_password(&format!("{label} character set toggled.")),
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn regenerate_password(&mut self, prefix: &str) {
+        match self.generator.regenerate() {
+            Ok(()) => {
+                self.status = format!(
+                    "{prefix} Length {} using {} allowed characters.",
+                    self.generator.length(),
+                    self.generator.alphabet_len()
+                );
+            }
+            Err(error) => {
+                self.status = format!("Could not generate password: {error}");
+            }
+        }
+    }
+
+    fn copy_generated_password(&mut self) {
+        if self.generator.password().is_empty() {
+            self.status = "There is no generated password to copy.".into();
+            return;
+        }
+
+        let password = Zeroizing::new(self.generator.password().to_string());
+        self.copy_text_to_clipboard(password.as_str(), "Generated password");
+    }
+
     fn handle_recently_deleted_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
@@ -781,7 +890,8 @@ impl App {
             | Mode::Unlock
             | Mode::Vault
             | Mode::ConfirmDelete
-            | Mode::RecentlyDeleted => {}
+            | Mode::RecentlyDeleted
+            | Mode::Generator => {}
         }
     }
 
@@ -1006,7 +1116,8 @@ impl App {
             | Mode::AddEntry
             | Mode::EditEntry
             | Mode::ConfirmDelete
-            | Mode::RecentlyDeleted => {}
+            | Mode::RecentlyDeleted
+            | Mode::Generator => {}
         }
     }
 
@@ -1555,6 +1666,7 @@ impl App {
         self.search_query.clear();
         self.search_editing = false;
         self.revealed_password_entry_id = None;
+        self.generator.clear_password();
 
         self.selected = 0;
         self.deleted_selected = 0;
