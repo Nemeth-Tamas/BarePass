@@ -319,7 +319,7 @@ impl App {
         match self.mode {
             Mode::AddEntry => self.save_add_entry(),
             Mode::EditEntry => self.save_edit_entry(),
-            Mode::Create | Mode::Confirm | Mode::Unlock | Mode::Vault => {}
+            Mode::Create | Mode::Confirm | Mode::Unlock | Mode::Vault | Mode::ConfirmDelete => {}
         }
     }
 
