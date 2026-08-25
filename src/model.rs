@@ -18,18 +18,21 @@ pub(crate) struct Vault {
     pub(crate) created_unix: u64,
     pub(crate) updated_unix: u64,
     pub(crate) entries: Vec<PasswordEntry>,
+    pub(crate) notes: Vec<SecureNote>,
 }
 
 #[derive(Serialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 enum VaultItemRef<'a> {
     Password(&'a PasswordEntry),
+    SecureNote(&'a SecureNote),
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 enum VaultItemOwned {
     Password(PasswordEntry),
+    SecureNote(SecureNote),
 }
 
 impl Serialize for Vault {
@@ -37,7 +40,12 @@ impl Serialize for Vault {
     where
         S: Serializer,
     {
-        let items: Vec<_> = self.entries.iter().map(VaultItemRef::Password).collect();
+        let items: Vec<_> = self
+            .entries
+            .iter()
+            .map(VaultItemRef::Password)
+            .chain(self.notes.iter().map(VaultItemRef::SecureNote))
+            .collect();
         let mut vault = serializer.serialize_struct("Vault", 4)?;
 
         vault.serialize_field("format_version", &CURRENT_VAULT_FORMAT_VERSION)?;
@@ -119,7 +127,7 @@ impl<'de> Visitor<'de> for VaultVisitor {
         let created_unix = created_unix.ok_or_else(|| M::Error::missing_field("created_unix"))?;
         let updated_unix = updated_unix.ok_or_else(|| M::Error::missing_field("updated_unix"))?;
 
-        let entries = match format_version {
+        let (entries, notes) = match format_version {
             1 => {
                 if items.is_some() {
                     return Err(M::Error::custom(
@@ -127,7 +135,7 @@ impl<'de> Visitor<'de> for VaultVisitor {
                     ));
                 }
 
-                legacy_entries.unwrap_or_default()
+                (legacy_entries.unwrap_or_default(), Vec::new())
             }
             CURRENT_VAULT_FORMAT_VERSION => {
                 if legacy_entries.is_some() {
@@ -136,13 +144,17 @@ impl<'de> Visitor<'de> for VaultVisitor {
                     ));
                 }
 
-                items
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|item| match item {
-                        VaultItemOwned::Password(entry) => entry,
-                    })
-                    .collect()
+                let mut entries = Vec::new();
+                let mut notes = Vec::new();
+
+                for item in items.unwrap_or_default() {
+                    match item {
+                        VaultItemOwned::Password(entry) => entries.push(entry),
+                        VaultItemOwned::SecureNote(note) => notes.push(note),
+                    }
+                }
+
+                (entries, notes)
             }
             unsupported => {
                 return Err(M::Error::custom(format!(
@@ -156,6 +168,7 @@ impl<'de> Visitor<'de> for VaultVisitor {
             created_unix,
             updated_unix,
             entries,
+            notes,
         })
     }
 }
@@ -169,6 +182,7 @@ impl Vault {
             created_unix: now,
             updated_unix: now,
             entries: Vec::new(),
+            notes: Vec::new(),
         }
     }
 
@@ -351,6 +365,21 @@ impl Drop for PasswordEntry {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SecureNote {
+    pub(crate) id: u64,
+    pub(crate) title: String,
+    pub(crate) body: String,
+    pub(crate) deleted_unix: Option<u64>,
+}
+
+impl Drop for SecureNote {
+    fn drop(&mut self) {
+        self.title.zeroize();
+        self.body.zeroize();
+    }
+}
+
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -383,10 +412,18 @@ mod tests {
             )
             .unwrap();
 
+        vault.notes.push(SecureNote {
+            id: 2,
+            title: "Recovery codes".into(),
+            body: "encrypted note contents".into(),
+            deleted_unix: None,
+        });
+
         let serialized = serde_json::to_string(&vault).unwrap();
 
         assert!(serialized.contains("\"format_version\":2"));
         assert!(serialized.contains("\"items\":[{\"type\":\"password\",\"data\":"));
+        assert!(serialized.contains("\"type\":\"secure_note\""));
         assert!(!serialized.contains("\"entries\":"));
 
         let reopened: Vault = serde_json::from_str(&serialized).unwrap();
@@ -422,6 +459,7 @@ mod tests {
         assert_eq!(vault.entries[0].id, 7);
         assert_eq!(vault.entries[0].title, "Legacy login");
         assert_eq!(vault.entries[0].password, "legacy-password");
+        assert!(vault.notes.is_empty());
 
         let migrated = serde_json::to_string(&vault).unwrap();
         assert!(migrated.contains("\"format_version\":2"));

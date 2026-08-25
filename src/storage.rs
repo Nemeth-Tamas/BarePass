@@ -564,7 +564,7 @@ fn read_u32_le(bytes: &[u8], start: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CURRENT_VAULT_FORMAT_VERSION, PasswordEntry};
+    use crate::model::{CURRENT_VAULT_FORMAT_VERSION, PasswordEntry, SecureNote};
 
     const MASTER_PASSWORD: &str = "correct horse battery staple";
 
@@ -582,6 +582,12 @@ mod tests {
                 notes: "BarePass encrypted-vault round-trip test".into(),
                 deleted_unix: None,
             }],
+            notes: vec![SecureNote {
+                id: 2,
+                title: "Recovery material".into(),
+                body: "encrypted recovery phrase".into(),
+                deleted_unix: None,
+            }],
         }
     }
 
@@ -594,6 +600,11 @@ mod tests {
             !encrypted
                 .windows(b"very-secret-password".len())
                 .any(|window| window == b"very-secret-password")
+        );
+        assert!(
+            !encrypted
+                .windows(b"encrypted recovery phrase".len())
+                .any(|window| window == b"encrypted recovery phrase")
         );
 
         let reopened = decrypt_vault_blob(&encrypted, MASTER_PASSWORD).unwrap();

@@ -92,7 +92,8 @@ This is a pre-1.0 core requirement, not an optional stretch goal.
 
 ## Phase 4 — additional secret types
 
-* [ ] Secure notes.
+* [x] Add the Secure Note item model and encrypted payload-v2 persistence.
+* [ ] Add Secure Note CRUD, search, clipboard, and recovery TUI.
 * [ ] Credit-card records.
 * [ ] File uploads / encrypted attachments.
 * [x] Design a versioned generic vault-item format before introducing multiple item types.
