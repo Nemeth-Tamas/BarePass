@@ -9,7 +9,7 @@ use ratatui::{
 use crate::{
     app::{AddField, App, Mode},
     generator::PasswordStrength,
-    password_analysis::reused_password_groups,
+    password_analysis::{reused_password_groups, weak_password_findings},
 };
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
@@ -315,6 +315,11 @@ fn draw_password_audit(frame: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
+    if app.password_audit_show_weak() {
+        draw_weak_password_audit(frame, app, area);
+        return;
+    }
+
     let groups = reused_password_groups(&unlocked.data().entries);
     let affected_count: usize = groups.iter().map(Vec::len).sum();
     let columns = Layout::default()
@@ -442,6 +447,130 @@ fn draw_password_audit(frame: &mut Frame, app: &App, area: Rect) {
                 .title(" Reuse details ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(details, columns[1]);
+}
+
+fn draw_weak_password_audit(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(unlocked) = app.vault() else {
+        return;
+    };
+
+    let findings = weak_password_findings(&unlocked.data().entries);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
+        .split(area);
+
+    let finding_lines = if findings.is_empty() {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No weak passwords flagged.",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Conservative heuristics found nothing obvious.",
+                Style::default().fg(Color::Gray),
+            )),
+        ]
+    } else {
+        findings
+            .iter()
+            .enumerate()
+            .map(|(index, finding)| {
+                let selected = index == app.password_audit_selected();
+                let marker = if selected { " > " } else { "   " };
+                let style = if selected {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                Line::from(vec![
+                    Span::styled(marker, Style::default().fg(Color::Red)),
+                    Span::styled(format!("#{}  ", finding.entry.id), style),
+                    Span::styled(finding.entry.title.as_str(), style),
+                ])
+            })
+            .collect()
+    };
+
+    let findings_panel = Paragraph::new(finding_lines)
+        .block(
+            Block::default()
+                .title(format!(" Weak passwords  {} finding(s) ", findings.len()))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red)),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(findings_panel, columns[0]);
+
+    let detail_lines = if let Some(finding) = findings.get(app.password_audit_selected()) {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(
+                    format!("#{}  ", finding.entry.id),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    finding.entry.title.as_str(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "FLAGGED BECAUSE:",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        for reason in &finding.reasons {
+            lines.push(Line::from(vec![
+                Span::styled("• ", Style::default().fg(Color::Red)),
+                Span::styled(*reason, Style::default().fg(Color::Gray)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Password text is intentionally never displayed by the audit.",
+            Style::default().fg(Color::Green),
+        )));
+        lines
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "NO OBVIOUS WEAKNESS DETECTED",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "This is a conservative heuristic check, not an entropy claim.",
+                Style::default().fg(Color::Gray),
+            )),
+        ]
+    };
+
+    let details = Paragraph::new(detail_lines)
+        .block(
+            Block::default()
+                .title(" Weakness details ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red)),
         )
         .wrap(Wrap { trim: false });
 
@@ -1139,7 +1268,11 @@ fn draw_empty_recently_deleted_confirmation(frame: &mut Frame, app: &App, area: 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.mode() {
         Mode::Vault if app.password_audit_open() => {
-            "  ↑↓/jk Reuse groups   Esc Vault   l Lock   q Quit"
+            if app.password_audit_show_weak() {
+                "  Tab Reused   ↑↓/jk Findings   Esc Vault   l Lock   q Quit"
+            } else {
+                "  Tab Weak   ↑↓/jk Reuse groups   Esc Vault   l Lock   q Quit"
+            }
         }
         Mode::Vault if app.search_editing() => {
             "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"

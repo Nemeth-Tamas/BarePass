@@ -12,7 +12,7 @@ use crate::{
     clipboard::{CLIPBOARD_CLEAR_SECS, ClipboardManager},
     generator::{CharacterSet, PasswordGenerator},
     model::{PasswordEntry, Vault},
-    password_analysis::reused_password_groups,
+    password_analysis::{reused_password_groups, weak_password_findings},
     storage::{
         UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault,
         load_unlocked_vault_with_recovery, prepare_vault_path, save_unlocked_vault,
@@ -265,6 +265,7 @@ pub(crate) struct App {
     generator: PasswordGenerator,
     password_audit_open: bool,
     password_audit_selected: usize,
+    password_audit_show_weak: bool,
     auto_lock_timeout: Option<Duration>,
     last_activity: Instant,
     should_quit: bool,
@@ -326,6 +327,7 @@ impl App {
             generator: PasswordGenerator::new(),
             password_audit_open: false,
             password_audit_selected: 0,
+            password_audit_show_weak: false,
             auto_lock_timeout,
             last_activity: Instant::now(),
             should_quit: false,
@@ -445,6 +447,10 @@ impl App {
 
     pub(crate) fn password_audit_selected(&self) -> usize {
         self.password_audit_selected
+    }
+
+    pub(crate) fn password_audit_show_weak(&self) -> bool {
+        self.password_audit_show_weak
     }
 
     pub(crate) fn auto_lock_seconds(&self) -> Option<u64> {
@@ -799,22 +805,30 @@ impl App {
         self.revealed_password_entry_id = None;
         self.password_audit_open = true;
         self.password_audit_selected = 0;
+        self.password_audit_show_weak = false;
 
-        let (group_count, affected_count) = self.password_audit_counts();
+        let (group_count, affected_count, weak_count) = self.password_audit_counts();
 
-        self.status = if group_count == 0 {
-            "Password audit found no reused passwords among active entries.".into()
-        } else {
-            format!(
-                "Password audit found {group_count} reused password group(s) affecting {affected_count} active entries."
-            )
-        };
+        self.status = format!(
+            "Security audit: {group_count} reused password group(s) affecting {affected_count} active entries; {weak_count} weak password finding(s)."
+        );
     }
 
     fn handle_password_audit_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('l') => self.lock_vault(),
+            KeyCode::Tab => {
+                self.password_audit_show_weak = !self.password_audit_show_weak;
+                self.password_audit_selected = 0;
+
+                let (group_count, _, weak_count) = self.password_audit_counts();
+                self.status = if self.password_audit_show_weak {
+                    format!("Showing {weak_count} weak password finding(s).")
+                } else {
+                    format!("Showing {group_count} reused password group(s).")
+                };
+            }
             KeyCode::Esc => {
                 self.password_audit_open = false;
                 self.status = "Returned to active vault.".into();
@@ -823,9 +837,9 @@ impl App {
                 self.password_audit_selected = self.password_audit_selected.saturating_sub(1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let group_count = self.password_audit_counts().0;
+                let item_count = self.password_audit_item_count();
 
-                if self.password_audit_selected + 1 < group_count {
+                if self.password_audit_selected + 1 < item_count {
                     self.password_audit_selected += 1;
                 }
             }
@@ -833,15 +847,28 @@ impl App {
         }
     }
 
-    fn password_audit_counts(&self) -> (usize, usize) {
+    fn password_audit_counts(&self) -> (usize, usize, usize) {
         let Some(vault) = self.vault.as_ref() else {
-            return (0, 0);
+            return (0, 0, 0);
         };
 
         let groups = reused_password_groups(&vault.data().entries);
         let affected_count = groups.iter().map(Vec::len).sum();
+        let weak_count = weak_password_findings(&vault.data().entries).len();
 
-        (groups.len(), affected_count)
+        (groups.len(), affected_count, weak_count)
+    }
+
+    fn password_audit_item_count(&self) -> usize {
+        let Some(vault) = self.vault.as_ref() else {
+            return 0;
+        };
+
+        if self.password_audit_show_weak {
+            weak_password_findings(&vault.data().entries).len()
+        } else {
+            reused_password_groups(&vault.data().entries).len()
+        }
     }
 
     fn handle_recently_deleted_key(&mut self, key: KeyEvent) {
@@ -1737,6 +1764,7 @@ impl App {
         self.generator.clear_password();
         self.password_audit_open = false;
         self.password_audit_selected = 0;
+        self.password_audit_show_weak = false;
 
         self.selected = 0;
         self.deleted_selected = 0;
