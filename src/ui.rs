@@ -632,7 +632,62 @@ fn draw_weak_password_audit(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(details, columns[1]);
 }
 
+fn draw_vault_tabs(frame: &mut Frame, recently_deleted: bool, area: Rect) {
+    let active_style = |color| {
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            " VAULT  ",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " ACTIVE ",
+            if recently_deleted {
+                Style::default().fg(Color::Cyan)
+            } else {
+                active_style(Color::Cyan)
+            },
+        ),
+        Span::raw("  "),
+        Span::styled(
+            " RECENTLY DELETED ",
+            if recently_deleted {
+                active_style(Color::Red)
+            } else {
+                Style::default().fg(Color::Red)
+            },
+        ),
+        Span::styled(
+            "    Tab switches view",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
+    frame.render_widget(
+        Paragraph::new(line).block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        ),
+        area,
+    );
+}
+
 fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(area);
+
+    draw_vault_tabs(frame, false, rows[0]);
+
     let Some(unlocked) = app.vault() else {
         return;
     };
@@ -640,7 +695,7 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(area);
+        .split(rows[1]);
 
     let total_active_count = unlocked
         .data()
@@ -869,6 +924,13 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_recently_deleted(frame: &mut Frame, app: &App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(area);
+
+    draw_vault_tabs(frame, true, rows[0]);
+
     let Some(unlocked) = app.vault() else {
         return;
     };
@@ -876,7 +938,7 @@ fn draw_recently_deleted(frame: &mut Frame, app: &App, area: Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(area);
+        .split(rows[1]);
 
     let deleted_entries: Vec<_> = unlocked
         .data()
