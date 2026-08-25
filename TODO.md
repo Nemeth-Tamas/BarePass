@@ -95,7 +95,7 @@ This is a pre-1.0 core requirement, not an optional stretch goal.
 * [ ] Secure notes.
 * [ ] Credit-card records.
 * [ ] File uploads / encrypted attachments.
-* [ ] Design a versioned generic vault-item format before introducing multiple item types.
+* [x] Design a versioned generic vault-item format before introducing multiple item types.
 * [ ] Ensure attachments are encrypted before touching persistent storage.
 * [ ] Decide sensible vault/attachment size limits.
 

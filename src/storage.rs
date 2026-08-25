@@ -564,13 +564,13 @@ fn read_u32_le(bytes: &[u8], start: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::PasswordEntry;
+    use crate::model::{CURRENT_VAULT_FORMAT_VERSION, PasswordEntry};
 
     const MASTER_PASSWORD: &str = "correct horse battery staple";
 
     fn sample_vault() -> Vault {
         Vault {
-            format_version: 1,
+            format_version: CURRENT_VAULT_FORMAT_VERSION,
             created_unix: 123,
             updated_unix: 456,
             entries: vec![PasswordEntry {

@@ -311,12 +311,19 @@ fn draw_password_generator(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_password_audit(frame: &mut Frame, app: &App, area: Rect) {
+    let audit_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(area);
+
+    draw_password_audit_tabs(frame, app, audit_rows[0]);
+
     let Some(unlocked) = app.vault() else {
         return;
     };
 
     if app.password_audit_show_weak() {
-        draw_weak_password_audit(frame, app, area);
+        draw_weak_password_audit(frame, app, audit_rows[1]);
         return;
     }
 
@@ -325,7 +332,7 @@ fn draw_password_audit(frame: &mut Frame, app: &App, area: Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
-        .split(area);
+        .split(audit_rows[1]);
 
     let group_lines = if groups.is_empty() {
         vec![
@@ -451,6 +458,54 @@ fn draw_password_audit(frame: &mut Frame, app: &App, area: Rect) {
         .wrap(Wrap { trim: false });
 
     frame.render_widget(details, columns[1]);
+}
+
+fn draw_password_audit_tabs(frame: &mut Frame, app: &App, area: Rect) {
+    let reused_active = !app.password_audit_show_weak();
+    let active_style = |color| {
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            " SECURITY AUDIT  ",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " REUSED ",
+            if reused_active {
+                active_style(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Yellow)
+            },
+        ),
+        Span::raw("  "),
+        Span::styled(
+            " WEAK ",
+            if reused_active {
+                Style::default().fg(Color::Red)
+            } else {
+                active_style(Color::Red)
+            },
+        ),
+        Span::styled(
+            "    Tab switches view",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
+    let tabs = Paragraph::new(line).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+
+    frame.render_widget(tabs, area);
 }
 
 fn draw_weak_password_audit(frame: &mut Frame, app: &App, area: Rect) {

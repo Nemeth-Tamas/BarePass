@@ -1,9 +1,18 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    fmt,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{Error as DeserializeError, IgnoredAny, MapAccess, Visitor},
+    ser::SerializeStruct,
+};
 use zeroize::{Zeroize, Zeroizing};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) const CURRENT_VAULT_FORMAT_VERSION: u32 = 2;
+
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Vault {
     pub(crate) format_version: u32,
     pub(crate) created_unix: u64,
@@ -11,12 +20,152 @@ pub(crate) struct Vault {
     pub(crate) entries: Vec<PasswordEntry>,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+enum VaultItemRef<'a> {
+    Password(&'a PasswordEntry),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+enum VaultItemOwned {
+    Password(PasswordEntry),
+}
+
+impl Serialize for Vault {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let items: Vec<_> = self.entries.iter().map(VaultItemRef::Password).collect();
+        let mut vault = serializer.serialize_struct("Vault", 4)?;
+
+        vault.serialize_field("format_version", &CURRENT_VAULT_FORMAT_VERSION)?;
+        vault.serialize_field("created_unix", &self.created_unix)?;
+        vault.serialize_field("updated_unix", &self.updated_unix)?;
+        vault.serialize_field("items", &items)?;
+        vault.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Vault {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(VaultVisitor)
+    }
+}
+
+struct VaultVisitor;
+
+impl<'de> Visitor<'de> for VaultVisitor {
+    type Value = Vault;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a BarePass vault payload")
+    }
+
+    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut format_version = None;
+        let mut created_unix = None;
+        let mut updated_unix = None;
+        let mut legacy_entries: Option<Vec<PasswordEntry>> = None;
+        let mut items: Option<Vec<VaultItemOwned>> = None;
+
+        while let Some(field) = map.next_key::<String>()? {
+            match field.as_str() {
+                "format_version" => {
+                    if format_version.is_some() {
+                        return Err(M::Error::duplicate_field("format_version"));
+                    }
+                    format_version = Some(map.next_value::<u32>()?);
+                }
+                "created_unix" => {
+                    if created_unix.is_some() {
+                        return Err(M::Error::duplicate_field("created_unix"));
+                    }
+                    created_unix = Some(map.next_value::<u64>()?);
+                }
+                "updated_unix" => {
+                    if updated_unix.is_some() {
+                        return Err(M::Error::duplicate_field("updated_unix"));
+                    }
+                    updated_unix = Some(map.next_value::<u64>()?);
+                }
+                "entries" => {
+                    if legacy_entries.is_some() {
+                        return Err(M::Error::duplicate_field("entries"));
+                    }
+                    legacy_entries = Some(map.next_value::<Vec<PasswordEntry>>()?);
+                }
+                "items" => {
+                    if items.is_some() {
+                        return Err(M::Error::duplicate_field("items"));
+                    }
+                    items = Some(map.next_value::<Vec<VaultItemOwned>>()?);
+                }
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+
+        let format_version =
+            format_version.ok_or_else(|| M::Error::missing_field("format_version"))?;
+        let created_unix = created_unix.ok_or_else(|| M::Error::missing_field("created_unix"))?;
+        let updated_unix = updated_unix.ok_or_else(|| M::Error::missing_field("updated_unix"))?;
+
+        let entries = match format_version {
+            1 => {
+                if items.is_some() {
+                    return Err(M::Error::custom(
+                        "vault format 1 cannot contain generic items",
+                    ));
+                }
+
+                legacy_entries.unwrap_or_default()
+            }
+            CURRENT_VAULT_FORMAT_VERSION => {
+                if legacy_entries.is_some() {
+                    return Err(M::Error::custom(
+                        "vault format 2 cannot contain legacy entries",
+                    ));
+                }
+
+                items
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|item| match item {
+                        VaultItemOwned::Password(entry) => entry,
+                    })
+                    .collect()
+            }
+            unsupported => {
+                return Err(M::Error::custom(format!(
+                    "unsupported vault payload format version {unsupported}"
+                )));
+            }
+        };
+
+        Ok(Vault {
+            format_version: CURRENT_VAULT_FORMAT_VERSION,
+            created_unix,
+            updated_unix,
+            entries,
+        })
+    }
+}
+
 impl Vault {
     pub(crate) fn new() -> Self {
         let now = now_unix();
 
         Self {
-            format_version: 1,
+            format_version: CURRENT_VAULT_FORMAT_VERSION,
             created_unix: now,
             updated_unix: now,
             entries: Vec::new(),
@@ -212,6 +361,85 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_vault_uses_the_current_generic_item_format_version() {
+        let vault = Vault::new();
+
+        assert_eq!(vault.format_version, CURRENT_VAULT_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn current_vault_serialization_uses_tagged_generic_items() {
+        let mut vault = Vault::new();
+
+        vault
+            .add_password_entry(
+                "Serialized login".into(),
+                "user@example.test".into(),
+                "test-secret".into(),
+                "https://example.test".into(),
+                "test notes".into(),
+            )
+            .unwrap();
+
+        let serialized = serde_json::to_string(&vault).unwrap();
+
+        assert!(serialized.contains("\"format_version\":2"));
+        assert!(serialized.contains("\"items\":[{\"type\":\"password\",\"data\":"));
+        assert!(!serialized.contains("\"entries\":"));
+
+        let reopened: Vault = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(reopened, vault);
+    }
+
+    #[test]
+    fn legacy_v1_entries_migrate_into_the_current_generic_item_model() {
+        let legacy = r#"{
+            "format_version": 1,
+            "created_unix": 10,
+            "updated_unix": 20,
+            "entries": [
+                {
+                    "id": 7,
+                    "title": "Legacy login",
+                    "username": "legacy-user",
+                    "password": "legacy-password",
+                    "url": "https://legacy.example",
+                    "notes": "legacy notes",
+                    "deleted_unix": null
+                }
+            ]
+        }"#;
+
+        let vault: Vault = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(vault.format_version, CURRENT_VAULT_FORMAT_VERSION);
+        assert_eq!(vault.created_unix, 10);
+        assert_eq!(vault.updated_unix, 20);
+        assert_eq!(vault.entries.len(), 1);
+        assert_eq!(vault.entries[0].id, 7);
+        assert_eq!(vault.entries[0].title, "Legacy login");
+        assert_eq!(vault.entries[0].password, "legacy-password");
+
+        let migrated = serde_json::to_string(&vault).unwrap();
+        assert!(migrated.contains("\"format_version\":2"));
+        assert!(migrated.contains("\"type\":\"password\""));
+        assert!(!migrated.contains("\"entries\":"));
+    }
+
+    #[test]
+    fn unsupported_payload_format_versions_are_rejected() {
+        let unsupported = r#"{
+            "format_version": 99,
+            "created_unix": 0,
+            "updated_unix": 0,
+            "items": []
+        }"#;
+
+        assert!(serde_json::from_str::<Vault>(unsupported).is_err());
+    }
 
     #[test]
     fn password_entries_receive_unique_monotonic_ids() {
