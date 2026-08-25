@@ -3,6 +3,7 @@ mod clipboard;
 mod crypto;
 mod generator;
 mod model;
+mod password_analysis;
 mod storage;
 mod ui;
 

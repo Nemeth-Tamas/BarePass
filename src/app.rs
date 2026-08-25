@@ -12,6 +12,7 @@ use crate::{
     clipboard::{CLIPBOARD_CLEAR_SECS, ClipboardManager},
     generator::{CharacterSet, PasswordGenerator},
     model::{PasswordEntry, Vault},
+    password_analysis::reused_password_groups,
     storage::{
         UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault,
         load_unlocked_vault_with_recovery, prepare_vault_path, save_unlocked_vault,
@@ -262,6 +263,8 @@ pub(crate) struct App {
     revealed_password_entry_id: Option<u64>,
     auto_purge_days: Option<u64>,
     generator: PasswordGenerator,
+    password_audit_open: bool,
+    password_audit_selected: usize,
     auto_lock_timeout: Option<Duration>,
     last_activity: Instant,
     should_quit: bool,
@@ -321,6 +324,8 @@ impl App {
             revealed_password_entry_id: None,
             auto_purge_days,
             generator: PasswordGenerator::new(),
+            password_audit_open: false,
+            password_audit_selected: 0,
             auto_lock_timeout,
             last_activity: Instant::now(),
             should_quit: false,
@@ -434,6 +439,14 @@ impl App {
         &self.generator
     }
 
+    pub(crate) fn password_audit_open(&self) -> bool {
+        self.password_audit_open
+    }
+
+    pub(crate) fn password_audit_selected(&self) -> usize {
+        self.password_audit_selected
+    }
+
     pub(crate) fn auto_lock_seconds(&self) -> Option<u64> {
         self.auto_lock_timeout.map(|timeout| timeout.as_secs())
     }
@@ -497,6 +510,11 @@ impl App {
     }
 
     fn handle_vault_key(&mut self, key: KeyEvent) {
+        if self.password_audit_open {
+            self.handle_password_audit_key(key);
+            return;
+        }
+
         if self.search_editing {
             self.handle_search_key(key);
             return;
@@ -521,6 +539,7 @@ impl App {
             KeyCode::Char('v') => self.toggle_selected_password_reveal(),
             KeyCode::Char('d') => self.open_delete_confirmation(),
             KeyCode::Char('g') => self.open_generator(),
+            KeyCode::Char('s') => self.open_password_audit(),
             KeyCode::Tab => self.open_recently_deleted(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection_up(),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection_down(),
@@ -774,6 +793,55 @@ impl App {
 
         let password = Zeroizing::new(self.generator.password().to_string());
         self.copy_text_to_clipboard(password.as_str(), "Generated password");
+    }
+
+    fn open_password_audit(&mut self) {
+        self.revealed_password_entry_id = None;
+        self.password_audit_open = true;
+        self.password_audit_selected = 0;
+
+        let (group_count, affected_count) = self.password_audit_counts();
+
+        self.status = if group_count == 0 {
+            "Password audit found no reused passwords among active entries.".into()
+        } else {
+            format!(
+                "Password audit found {group_count} reused password group(s) affecting {affected_count} active entries."
+            )
+        };
+    }
+
+    fn handle_password_audit_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('l') => self.lock_vault(),
+            KeyCode::Esc => {
+                self.password_audit_open = false;
+                self.status = "Returned to active vault.".into();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.password_audit_selected = self.password_audit_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let group_count = self.password_audit_counts().0;
+
+                if self.password_audit_selected + 1 < group_count {
+                    self.password_audit_selected += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn password_audit_counts(&self) -> (usize, usize) {
+        let Some(vault) = self.vault.as_ref() else {
+            return (0, 0);
+        };
+
+        let groups = reused_password_groups(&vault.data().entries);
+        let affected_count = groups.iter().map(Vec::len).sum();
+
+        (groups.len(), affected_count)
     }
 
     fn handle_recently_deleted_key(&mut self, key: KeyEvent) {
@@ -1667,6 +1735,8 @@ impl App {
         self.search_editing = false;
         self.revealed_password_entry_id = None;
         self.generator.clear_password();
+        self.password_audit_open = false;
+        self.password_audit_selected = 0;
 
         self.selected = 0;
         self.deleted_selected = 0;

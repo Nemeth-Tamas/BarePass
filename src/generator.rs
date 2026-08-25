@@ -23,6 +23,7 @@ pub(crate) enum PasswordStrength {
     Fair,
     Strong,
     VeryStrong,
+    Ludicrous,
 }
 
 impl PasswordStrength {
@@ -32,6 +33,7 @@ impl PasswordStrength {
             Self::Fair => "Fair",
             Self::Strong => "Strong",
             Self::VeryStrong => "Very strong",
+            Self::Ludicrous => "Ludicrous",
         }
     }
 }
@@ -105,7 +107,16 @@ impl PasswordGenerator {
     }
 
     pub(crate) fn strength(&self) -> PasswordStrength {
-        classify_entropy(self.entropy_bits())
+        if self.length == MAX_PASSWORD_LENGTH
+            && self.lowercase
+            && self.uppercase
+            && self.digits
+            && self.symbols
+        {
+            PasswordStrength::Ludicrous
+        } else {
+            classify_entropy(self.entropy_bits())
+        }
     }
 
     pub(crate) fn increase_length(&mut self) -> bool {
@@ -315,5 +326,20 @@ mod tests {
         assert_eq!(classify_entropy(80.0), PasswordStrength::Strong);
         assert_eq!(classify_entropy(111.99), PasswordStrength::Strong);
         assert_eq!(classify_entropy(112.0), PasswordStrength::VeryStrong);
+    }
+
+    #[test]
+    fn ludicrous_requires_maximum_length_and_every_character_set() {
+        let mut generator = PasswordGenerator::new();
+
+        generator.length = MAX_PASSWORD_LENGTH;
+        assert_eq!(generator.strength(), PasswordStrength::Ludicrous);
+
+        generator.toggle(CharacterSet::Symbols).unwrap();
+        assert_eq!(generator.strength(), PasswordStrength::VeryStrong);
+
+        generator.toggle(CharacterSet::Symbols).unwrap();
+        generator.length = MAX_PASSWORD_LENGTH - 1;
+        assert_eq!(generator.strength(), PasswordStrength::VeryStrong);
     }
 }

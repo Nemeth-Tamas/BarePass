@@ -9,6 +9,7 @@ use ratatui::{
 use crate::{
     app::{AddField, App, Mode},
     generator::PasswordStrength,
+    password_analysis::reused_password_groups,
 };
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
@@ -24,7 +25,13 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     draw_header(frame, chunks[0]);
 
     match app.mode() {
-        Mode::Vault => draw_vault(frame, app, chunks[1]),
+        Mode::Vault => {
+            if app.password_audit_open() {
+                draw_password_audit(frame, app, chunks[1]);
+            } else {
+                draw_vault(frame, app, chunks[1]);
+            }
+        }
         Mode::RecentlyDeleted => draw_recently_deleted(frame, app, chunks[1]),
         Mode::Generator => draw_password_generator(frame, app, chunks[1]),
         Mode::AddEntry | Mode::EditEntry => {
@@ -239,6 +246,7 @@ fn draw_password_generator(frame: &mut Frame, app: &App, area: Rect) {
         PasswordStrength::Fair => Color::Yellow,
         PasswordStrength::Strong => Color::Cyan,
         PasswordStrength::VeryStrong => Color::Green,
+        PasswordStrength::Ludicrous => Color::Magenta,
     };
 
     frame.render_widget(
@@ -300,6 +308,144 @@ fn draw_password_generator(frame: &mut Frame, app: &App, area: Rect) {
         .wrap(Wrap { trim: true }),
         rows[4],
     );
+}
+
+fn draw_password_audit(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(unlocked) = app.vault() else {
+        return;
+    };
+
+    let groups = reused_password_groups(&unlocked.data().entries);
+    let affected_count: usize = groups.iter().map(Vec::len).sum();
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(36), Constraint::Percentage(64)])
+        .split(area);
+
+    let group_lines = if groups.is_empty() {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No reused passwords found.",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Active passwords are unique.",
+                Style::default().fg(Color::Gray),
+            )),
+        ]
+    } else {
+        groups
+            .iter()
+            .enumerate()
+            .map(|(index, group)| {
+                let selected = index == app.password_audit_selected();
+                let marker = if selected { " > " } else { "   " };
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                Line::from(vec![
+                    Span::styled(marker, Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("Reuse group {}  •  {} entries", index + 1, group.len()),
+                        style,
+                    ),
+                ])
+            })
+            .collect()
+    };
+
+    let groups_panel = Paragraph::new(group_lines)
+        .block(
+            Block::default()
+                .title(format!(
+                    " Reused passwords  {} group(s) / {} affected ",
+                    groups.len(),
+                    affected_count
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(groups_panel, columns[0]);
+
+    let detail_lines = if let Some(group) = groups.get(app.password_audit_selected()) {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "SAME PASSWORD USED BY:",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        for entry in group {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("#{}  ", entry.id),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(entry.title.as_str(), Style::default().fg(Color::White)),
+            ]));
+
+            if !entry.username.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(entry.username.as_str(), Style::default().fg(Color::Gray)),
+                ]));
+            }
+
+            lines.push(Line::from(""));
+        }
+
+        lines.push(Line::from(Span::styled(
+            "Password text is intentionally never displayed here.",
+            Style::default().fg(Color::Green),
+        )));
+
+        lines
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "NO REUSE DETECTED",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Comparison is exact, local, and performed only in memory.",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "No password hashes or fingerprints are persisted.",
+                Style::default().fg(Color::Gray),
+            )),
+        ]
+    };
+
+    let details = Paragraph::new(detail_lines)
+        .block(
+            Block::default()
+                .title(" Reuse details ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(details, columns[1]);
 }
 
 fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
@@ -992,14 +1138,17 @@ fn draw_empty_recently_deleted_confirmation(frame: &mut Frame, app: &App, area: 
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.mode() {
+        Mode::Vault if app.password_audit_open() => {
+            "  ↑↓/jk Reuse groups   Esc Vault   l Lock   q Quit"
+        }
         Mode::Vault if app.search_editing() => {
             "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"
         }
         Mode::Vault if !app.search_query().is_empty() => {
-            "  / Search   Esc Clear   g Generate   u Copy user   p Copy pass   v Reveal/hide   e Edit"
+            "  / Search   Esc Clear   g Generate   s Audit   u User   p Pass   v Reveal   e Edit"
         }
         Mode::Vault => {
-            "  / Search   g Generate   u Copy user   p Copy pass   v Reveal/hide   a Add   e Edit"
+            "  / Search   g Generate   s Audit   u User   p Pass   v Reveal   a Add   e Edit"
         }
         Mode::RecentlyDeleted => {
             "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"

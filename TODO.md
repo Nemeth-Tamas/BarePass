@@ -87,7 +87,7 @@ This is a pre-1.0 core requirement, not an optional stretch goal.
 * [x] Character-set controls.
 * [x] Avoid biased random character selection.
 * [x] Password strength feedback.
-* [ ] Duplicate/reused-password analysis.
+* [x] Duplicate/reused-password analysis.
 * [ ] Weak-password analysis.
 
 ## Phase 4 — additional secret types
