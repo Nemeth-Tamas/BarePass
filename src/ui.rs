@@ -680,13 +680,193 @@ fn draw_vault_tabs(frame: &mut Frame, recently_deleted: bool, area: Rect) {
     );
 }
 
+fn draw_active_item_tabs(frame: &mut Frame, app: &App, area: Rect) {
+    let passwords_active = !app.vault_show_notes();
+    let active_style = |color| {
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            " ACTIVE ITEMS  ",
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " [1] PASSWORDS ",
+            if passwords_active {
+                active_style(Color::Cyan)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
+        ),
+        Span::raw("  "),
+        Span::styled(
+            " [2] NOTES ",
+            if passwords_active {
+                Style::default().fg(Color::Yellow)
+            } else {
+                active_style(Color::Yellow)
+            },
+        ),
+    ]);
+
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn draw_secure_notes(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(unlocked) = app.vault() else {
+        return;
+    };
+
+    let active_notes: Vec<_> = unlocked
+        .data()
+        .notes
+        .iter()
+        .filter(|note| note.deleted_unix.is_none())
+        .collect();
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(area);
+
+    let list_lines = if active_notes.is_empty() {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No secure notes yet.",
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::ITALIC),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Creation comes in the next slice.",
+                Style::default().fg(Color::Yellow),
+            )),
+        ]
+    } else {
+        active_notes
+            .iter()
+            .enumerate()
+            .map(|(index, note)| {
+                let selected = index == app.note_selected_index();
+                let marker = if selected { " > " } else { "   " };
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+
+                Line::from(vec![
+                    Span::styled(marker, Style::default().fg(Color::Yellow)),
+                    Span::styled(format!("#{}  ", note.id), style),
+                    Span::styled(note.title.as_str(), style),
+                ])
+            })
+            .collect()
+    };
+
+    frame.render_widget(
+        Paragraph::new(list_lines)
+            .block(
+                Block::default()
+                    .title(format!(" Secure Notes  {} active ", active_notes.len()))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            )
+            .wrap(Wrap { trim: false }),
+        columns[0],
+    );
+
+    let detail_lines = if let Some(note) = app.selected_note() {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "SECURE NOTE",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Title       ", Style::default().fg(Color::DarkGray)),
+                Span::styled(note.title.as_str(), Style::default().fg(Color::White)),
+            ]),
+            Line::from(""),
+        ];
+
+        if note.body.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "(empty note body)",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        } else {
+            for body_line in note.body.lines() {
+                lines.push(Line::from(Span::styled(
+                    body_line,
+                    Style::default().fg(Color::Gray),
+                )));
+            }
+        }
+
+        lines
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "SECURE NOTES",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Encrypted note browsing is ready.",
+                Style::default().fg(Color::Green),
+            )),
+        ]
+    };
+
+    frame.render_widget(
+        Paragraph::new(detail_lines)
+            .block(
+                Block::default()
+                    .title(" Note details ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow)),
+            )
+            .wrap(Wrap { trim: false }),
+        columns[1],
+    );
+}
+
 fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(2),
+            Constraint::Min(1),
+        ])
         .split(area);
 
     draw_vault_tabs(frame, false, rows[0]);
+    draw_active_item_tabs(frame, app, rows[1]);
+
+    if app.vault_show_notes() {
+        draw_secure_notes(frame, app, rows[2]);
+        return;
+    }
 
     let Some(unlocked) = app.vault() else {
         return;
@@ -695,7 +875,7 @@ fn draw_vault(frame: &mut Frame, app: &App, area: Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(rows[1]);
+        .split(rows[2]);
 
     let total_active_count = unlocked
         .data()
@@ -1390,6 +1570,9 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 "  Tab Weak   ↑↓/jk Reuse groups   Esc Vault   l Lock   q Quit"
             }
+        }
+        Mode::Vault if app.vault_show_notes() => {
+            "  1 Passwords   2 Notes   ↑↓/jk Select   Tab Deleted   g Generate   s Audit"
         }
         Mode::Vault if app.search_editing() => {
             "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"

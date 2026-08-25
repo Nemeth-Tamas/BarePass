@@ -11,7 +11,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::{
     clipboard::{CLIPBOARD_CLEAR_SECS, ClipboardManager},
     generator::{CharacterSet, PasswordGenerator},
-    model::{PasswordEntry, Vault},
+    model::{PasswordEntry, SecureNote, Vault},
     password_analysis::{reused_password_groups, weak_password_findings},
     storage::{
         UnlockedVault, VaultLock, acquire_vault_lock, create_unlocked_vault,
@@ -251,6 +251,8 @@ pub(crate) struct App {
     vault_lock: Option<VaultLock>,
     vault_path: PathBuf,
     selected: usize,
+    note_selected: usize,
+    vault_show_notes: bool,
     deleted_selected: usize,
     add_form: AddEntryForm,
     editing_entry_id: Option<u64>,
@@ -313,6 +315,8 @@ impl App {
             vault_lock: None,
             vault_path,
             selected: 0,
+            note_selected: 0,
+            vault_show_notes: false,
             deleted_selected: 0,
             add_form: AddEntryForm::new(),
             editing_entry_id: None,
@@ -346,6 +350,14 @@ impl App {
         self.selected
     }
 
+    pub(crate) fn note_selected_index(&self) -> usize {
+        self.note_selected
+    }
+
+    pub(crate) fn vault_show_notes(&self) -> bool {
+        self.vault_show_notes
+    }
+
     pub(crate) fn selected_entry(&self) -> Option<&PasswordEntry> {
         self.vault
             .as_ref()?
@@ -357,6 +369,16 @@ impl App {
                     && password_entry_matches_search(entry, self.search_query.as_str())
             })
             .nth(self.selected)
+    }
+
+    pub(crate) fn selected_note(&self) -> Option<&SecureNote> {
+        self.vault
+            .as_ref()?
+            .data()
+            .notes
+            .iter()
+            .filter(|note| note.deleted_unix.is_none())
+            .nth(self.note_selected)
     }
 
     pub(crate) fn selected_password_revealed(&self) -> bool {
@@ -529,7 +551,9 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('l') => self.lock_vault(),
-            KeyCode::Char('/') => {
+            KeyCode::Char('1') => self.show_passwords_tab(),
+            KeyCode::Char('2') => self.show_notes_tab(),
+            KeyCode::Char('/') if !self.vault_show_notes => {
                 self.search_editing = true;
                 self.revealed_password_entry_id = None;
                 self.selected = 0;
@@ -538,12 +562,12 @@ impl App {
             KeyCode::Esc if !self.search_query.is_empty() => {
                 self.clear_search();
             }
-            KeyCode::Char('a') => self.open_add_entry(),
-            KeyCode::Char('e') => self.open_edit_entry(),
-            KeyCode::Char('u') => self.copy_selected_username(),
-            KeyCode::Char('p') => self.copy_selected_password(),
-            KeyCode::Char('v') => self.toggle_selected_password_reveal(),
-            KeyCode::Char('d') => self.open_delete_confirmation(),
+            KeyCode::Char('a') if !self.vault_show_notes => self.open_add_entry(),
+            KeyCode::Char('e') if !self.vault_show_notes => self.open_edit_entry(),
+            KeyCode::Char('u') if !self.vault_show_notes => self.copy_selected_username(),
+            KeyCode::Char('p') if !self.vault_show_notes => self.copy_selected_password(),
+            KeyCode::Char('v') if !self.vault_show_notes => self.toggle_selected_password_reveal(),
+            KeyCode::Char('d') if !self.vault_show_notes => self.open_delete_confirmation(),
             KeyCode::Char('g') => self.open_generator(),
             KeyCode::Char('s') => self.open_password_audit(),
             KeyCode::Tab => self.open_recently_deleted(),
@@ -551,6 +575,41 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.move_selection_down(),
             _ => {}
         }
+    }
+
+    fn show_passwords_tab(&mut self) {
+        self.vault_show_notes = false;
+        self.revealed_password_entry_id = None;
+        self.status = "Passwords view selected.".into();
+    }
+
+    fn show_notes_tab(&mut self) {
+        self.search_query.zeroize();
+        self.search_query.clear();
+        self.search_editing = false;
+        self.revealed_password_entry_id = None;
+        self.vault_show_notes = true;
+
+        let count = self.active_note_count();
+        if self.note_selected >= count {
+            self.note_selected = count.saturating_sub(1);
+        }
+
+        self.status = format!("Secure Notes view selected. {count} active note(s).");
+    }
+
+    fn active_note_count(&self) -> usize {
+        self.vault
+            .as_ref()
+            .map(|vault| {
+                vault
+                    .data()
+                    .notes
+                    .iter()
+                    .filter(|note| note.deleted_unix.is_none())
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     fn handle_search_key(&mut self, key: KeyEvent) {
@@ -1116,6 +1175,11 @@ impl App {
     }
 
     fn move_selection_up(&mut self) {
+        if self.vault_show_notes {
+            self.note_selected = self.note_selected.saturating_sub(1);
+            return;
+        }
+
         let previous = self.selected;
         self.selected = self.selected.saturating_sub(1);
 
@@ -1125,6 +1189,14 @@ impl App {
     }
 
     fn move_selection_down(&mut self) {
+        if self.vault_show_notes {
+            let active_count = self.active_note_count();
+            if self.note_selected + 1 < active_count {
+                self.note_selected += 1;
+            }
+            return;
+        }
+
         let active_count = self.filtered_active_count();
 
         if self.selected + 1 < active_count {
@@ -1765,8 +1837,10 @@ impl App {
         self.password_audit_open = false;
         self.password_audit_selected = 0;
         self.password_audit_show_weak = false;
+        self.vault_show_notes = false;
 
         self.selected = 0;
+        self.note_selected = 0;
         self.deleted_selected = 0;
         self.mode = Mode::Unlock;
         self.last_activity = Instant::now();
