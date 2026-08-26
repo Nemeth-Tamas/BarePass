@@ -82,6 +82,7 @@ pub(crate) enum Mode {
     AddEntry,
     AddNote,
     EditEntry,
+    EditNote,
     ConfirmDelete,
     RecentlyDeleted,
     Generator,
@@ -219,6 +220,12 @@ impl SecureNoteForm {
         }
     }
 
+    fn load_from_note(&mut self, note: &SecureNote) {
+        self.reset();
+        self.title.push_str(&note.title);
+        self.body.push_str(&note.body);
+    }
+
     pub(crate) fn field(&self) -> NoteField {
         self.field
     }
@@ -314,6 +321,7 @@ pub(crate) struct App {
     add_form: AddEntryForm,
     note_form: SecureNoteForm,
     editing_entry_id: Option<u64>,
+    editing_note_id: Option<u64>,
     permanent_delete_entry_id: Option<u64>,
     empty_recently_deleted_confirmation: bool,
     status: String,
@@ -379,6 +387,7 @@ impl App {
             add_form: AddEntryForm::new(),
             note_form: SecureNoteForm::new(),
             editing_entry_id: None,
+            editing_note_id: None,
             permanent_delete_entry_id: None,
             empty_recently_deleted_confirmation: false,
             status,
@@ -562,7 +571,7 @@ impl App {
             Mode::Vault => self.handle_vault_key(key),
             Mode::RecentlyDeleted => self.handle_recently_deleted_key(key),
             Mode::AddEntry | Mode::EditEntry => self.handle_entry_form_key(key),
-            Mode::AddNote => self.handle_note_form_key(key),
+            Mode::AddNote | Mode::EditNote => self.handle_note_form_key(key),
             Mode::ConfirmDelete => self.handle_delete_confirmation_key(key),
             Mode::Generator => self.handle_generator_key(key),
             Mode::Create | Mode::Confirm | Mode::Unlock => {
@@ -633,7 +642,13 @@ impl App {
                     self.open_add_entry();
                 }
             }
-            KeyCode::Char('e') if !self.vault_show_notes => self.open_edit_entry(),
+            KeyCode::Char('e') => {
+                if self.vault_show_notes {
+                    self.open_edit_note();
+                } else {
+                    self.open_edit_entry();
+                }
+            }
             KeyCode::Char('u') if !self.vault_show_notes => self.copy_selected_username(),
             KeyCode::Char('p') if !self.vault_show_notes => self.copy_selected_password(),
             KeyCode::Char('v') if !self.vault_show_notes => self.toggle_selected_password_reveal(),
@@ -1122,15 +1137,21 @@ impl App {
                 KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter
             )
         {
-            self.save_add_note();
+            self.save_note_form();
             return;
         }
 
         match key.code {
             KeyCode::Esc => {
+                let was_editing = self.mode == Mode::EditNote;
                 self.note_form.reset();
+                self.editing_note_id = None;
                 self.mode = Mode::Vault;
-                self.status = "New secure note cancelled.".into();
+                self.status = if was_editing {
+                    "Secure note edit cancelled.".into()
+                } else {
+                    "New secure note cancelled.".into()
+                };
             }
             KeyCode::Tab => self.note_form.next_field(),
             KeyCode::BackTab => self.note_form.previous_field(),
@@ -1154,6 +1175,14 @@ impl App {
         }
     }
 
+    fn save_note_form(&mut self) {
+        match self.mode {
+            Mode::AddNote => self.save_add_note(),
+            Mode::EditNote => self.save_edit_note(),
+            _ => {}
+        }
+    }
+
     fn save_entry_form(&mut self) {
         match self.mode {
             Mode::AddEntry => self.save_add_entry(),
@@ -1163,6 +1192,7 @@ impl App {
             | Mode::Unlock
             | Mode::Vault
             | Mode::AddNote
+            | Mode::EditNote
             | Mode::ConfirmDelete
             | Mode::RecentlyDeleted
             | Mode::Generator => {}
@@ -1183,9 +1213,34 @@ impl App {
 
     fn open_add_note(&mut self) {
         self.note_form.reset();
+        self.editing_note_id = None;
         self.note_selected = 0;
         self.mode = Mode::AddNote;
         self.status = "Adding a new secure note.".into();
+    }
+
+    fn open_edit_note(&mut self) {
+        let Some(vault) = self.vault.as_ref() else {
+            self.status = "Vault is no longer unlocked.".into();
+            return;
+        };
+
+        let Some(note) = vault
+            .data()
+            .notes
+            .iter()
+            .filter(|note| note.deleted_unix.is_none())
+            .nth(self.note_selected)
+        else {
+            self.status = "There is no secure note selected to edit.".into();
+            return;
+        };
+
+        let note_id = note.id;
+        self.note_form.load_from_note(note);
+        self.editing_note_id = Some(note_id);
+        self.mode = Mode::EditNote;
+        self.status = format!("Editing secure note #{note_id}.");
     }
 
     fn open_recently_deleted(&mut self) {
@@ -1410,6 +1465,7 @@ impl App {
             | Mode::AddEntry
             | Mode::EditEntry
             | Mode::AddNote
+            | Mode::EditNote
             | Mode::ConfirmDelete
             | Mode::RecentlyDeleted
             | Mode::Generator => {}
@@ -1680,8 +1736,80 @@ impl App {
 
         self.note_selected = self.active_note_count().saturating_sub(1);
         self.note_form.reset();
+        self.editing_note_id = None;
         self.mode = Mode::Vault;
         self.status = format!("Secure note #{id} saved to the encrypted vault.");
+    }
+
+    fn save_edit_note(&mut self) {
+        let Some(id) = self.editing_note_id else {
+            self.note_form.reset();
+            self.mode = Mode::Vault;
+            self.status = "No secure note is selected for editing.".into();
+            return;
+        };
+
+        let title = self.note_form.value(NoteField::Title).trim();
+        if title.is_empty() {
+            self.note_form.field = NoteField::Title;
+            self.status = "A secure note needs a title.".into();
+            return;
+        }
+
+        let mut title = Zeroizing::new(title.to_string());
+        let mut body = Zeroizing::new(self.note_form.value(NoteField::Body).to_string());
+        let vault_path = self.vault_path.clone();
+
+        let Some(vault) = self.vault.as_mut() else {
+            self.note_form.reset();
+            self.editing_note_id = None;
+            self.mode = Mode::Unlock;
+            self.status = "Vault is no longer unlocked.".into();
+            return;
+        };
+
+        let previous_updated = vault.data().updated_unix;
+        let (old_title, old_body) = {
+            let Some(note) = vault.data().notes.iter().find(|note| note.id == id) else {
+                self.note_form.reset();
+                self.editing_note_id = None;
+                self.mode = Mode::Vault;
+                self.status = format!("Secure note #{id} no longer exists.");
+                return;
+            };
+
+            (
+                Zeroizing::new(note.title.clone()),
+                Zeroizing::new(note.body.clone()),
+            )
+        };
+
+        if let Err(error) = vault.data_mut().update_secure_note(
+            id,
+            std::mem::take(&mut *title),
+            std::mem::take(&mut *body),
+        ) {
+            self.status = format!("Could not update secure note: {error}");
+            return;
+        }
+
+        if let Err(error) = save_unlocked_vault(&vault_path, vault) {
+            let data = vault.data_mut();
+            if let Some(note) = data.notes.iter_mut().find(|note| note.id == id) {
+                note.title.zeroize();
+                note.body.zeroize();
+                note.title.push_str(old_title.as_str());
+                note.body.push_str(old_body.as_str());
+            }
+            data.updated_unix = previous_updated;
+            self.status = format!("Could not save edited secure note: {error}");
+            return;
+        }
+
+        self.note_form.reset();
+        self.editing_note_id = None;
+        self.mode = Mode::Vault;
+        self.status = format!("Secure note #{id} updated in the encrypted vault.");
     }
 
     fn save_edit_entry(&mut self) {
@@ -2006,6 +2134,7 @@ impl App {
         self.add_form.reset();
         self.note_form.reset();
         self.editing_entry_id = None;
+        self.editing_note_id = None;
         self.permanent_delete_entry_id = None;
         self.empty_recently_deleted_confirmation = false;
         self.search_query.zeroize();

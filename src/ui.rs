@@ -38,7 +38,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             draw_vault(frame, app, chunks[1]);
             draw_entry_form(frame, app, chunks[1]);
         }
-        Mode::AddNote => {
+        Mode::AddNote | Mode::EditNote => {
             draw_vault(frame, app, chunks[1]);
             draw_note_form(frame, app, chunks[1]);
         }
@@ -116,6 +116,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         | Mode::AddEntry
         | Mode::EditEntry
         | Mode::AddNote
+        | Mode::EditNote
         | Mode::ConfirmDelete
         | Mode::RecentlyDeleted
         | Mode::Generator => return,
@@ -167,6 +168,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     frame.render_widget(input, rows[1]);
+    place_single_line_cursor(frame, app.input_len(), rows[1]);
 
     let hint = match app.mode() {
         Mode::Create => "Minimum 12 characters  •  Enter continue  •  Esc quit",
@@ -176,6 +178,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         | Mode::AddEntry
         | Mode::EditEntry
         | Mode::AddNote
+        | Mode::EditNote
         | Mode::ConfirmDelete
         | Mode::RecentlyDeleted
         | Mode::Generator => "",
@@ -1365,6 +1368,10 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
         );
 
         frame.render_widget(field_widget, rows[index + 1]);
+
+        if selected {
+            place_single_line_cursor(frame, value.chars().count(), rows[index + 1]);
+        }
     }
 
     frame.render_widget(
@@ -1378,8 +1385,13 @@ fn draw_note_form(frame: &mut Frame, app: &App, area: Rect) {
     let popup = centered_rect(80, 25, area);
     frame.render_widget(Clear, popup);
 
+    let editing = app.mode() == Mode::EditNote;
     let outer = Block::default()
-        .title(" Add secure note ")
+        .title(if editing {
+            " Edit secure note "
+        } else {
+            " Add secure note "
+        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
     let inner = outer.inner(popup);
@@ -1422,8 +1434,15 @@ fn draw_note_form(frame: &mut Frame, app: &App, area: Rect) {
         rows[1],
     );
 
+    if title_selected {
+        place_single_line_cursor(frame, title.chars().count(), rows[1]);
+    }
+
     let body_selected = app.note_form().field() == NoteField::Body;
     let body = app.note_form().value(NoteField::Body);
+    let (cursor_x, cursor_y, vertical_scroll, horizontal_scroll) =
+        multiline_cursor_at_end(body, rows[2]);
+
     frame.render_widget(
         Paragraph::new(if body.is_empty() { " " } else { body })
             .style(Style::default().fg(Color::Gray))
@@ -1437,9 +1456,13 @@ fn draw_note_form(frame: &mut Frame, app: &App, area: Rect) {
                         Style::default().fg(Color::DarkGray)
                     }),
             )
-            .wrap(Wrap { trim: false }),
+            .scroll((vertical_scroll, horizontal_scroll)),
         rows[2],
     );
+
+    if body_selected {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 
     frame.render_widget(
         Paragraph::new(
@@ -1673,7 +1696,9 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::AddEntry | Mode::EditEntry => {
             "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel"
         }
-        Mode::AddNote => "  Ctrl+S Save   Tab Fields   Enter Next/New line   Esc Cancel",
+        Mode::AddNote | Mode::EditNote => {
+            "  Ctrl+S Save   Tab Fields   Enter Next/New line   Esc Cancel"
+        }
         Mode::Generator => "  ←/→ Length   1-4 Sets   r Regenerate   c Copy   Esc Vault",
         Mode::ConfirmDelete => {
             if app.is_empty_recently_deleted_confirmation() {
@@ -1701,6 +1726,40 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     frame.render_widget(footer, area);
+}
+
+fn place_single_line_cursor(frame: &mut Frame, character_count: usize, area: Rect) {
+    let width = usize::from(area.width.saturating_sub(2).max(1));
+    let visible_column = character_count.min(width.saturating_sub(1));
+    frame.set_cursor_position((
+        area.x.saturating_add(1 + visible_column as u16),
+        area.y.saturating_add(1),
+    ));
+}
+
+fn multiline_cursor_at_end(value: &str, area: Rect) -> (u16, u16, u16, u16) {
+    let width = usize::from(area.width.saturating_sub(2).max(1));
+    let height = usize::from(area.height.saturating_sub(2).max(1));
+    let line_count = value.split('\n').count();
+    let last_line_width = value
+        .rsplit_once('\n')
+        .map_or(value, |(_, last_line)| last_line)
+        .chars()
+        .count();
+
+    let vertical_scroll = line_count.saturating_sub(height);
+    let horizontal_scroll = last_line_width.saturating_sub(width.saturating_sub(1));
+    let visible_row = line_count.saturating_sub(1).saturating_sub(vertical_scroll);
+    let visible_column = last_line_width.saturating_sub(horizontal_scroll);
+
+    (
+        area.x
+            .saturating_add(1 + u16::try_from(visible_column).unwrap_or(u16::MAX)),
+        area.y
+            .saturating_add(1 + u16::try_from(visible_row).unwrap_or(u16::MAX)),
+        u16::try_from(vertical_scroll).unwrap_or(u16::MAX),
+        u16::try_from(horizontal_scroll).unwrap_or(u16::MAX),
+    )
 }
 
 fn format_unix_timestamp(timestamp: u64) -> String {

@@ -244,6 +244,30 @@ impl Vault {
         Ok(id)
     }
 
+    pub(crate) fn update_secure_note(
+        &mut self,
+        id: u64,
+        title: String,
+        body: String,
+    ) -> Result<(), String> {
+        let mut title = Zeroizing::new(title);
+        let mut body = Zeroizing::new(body);
+
+        let note = self
+            .notes
+            .iter_mut()
+            .find(|note| note.id == id && note.deleted_unix.is_none())
+            .ok_or_else(|| format!("secure note #{id} was not found"))?;
+
+        note.title.zeroize();
+        note.body.zeroize();
+        note.title = std::mem::take(&mut *title);
+        note.body = std::mem::take(&mut *body);
+        self.updated_unix = now_unix();
+
+        Ok(())
+    }
+
     pub(crate) fn update_password_entry(
         &mut self,
         id: u64,
@@ -569,6 +593,26 @@ mod tests {
         assert_eq!(vault.notes[0].title, "Recovery");
         assert_eq!(vault.notes[0].body, "first line\nsecond line");
         assert!(vault.notes[0].deleted_unix.is_none());
+    }
+
+    #[test]
+    fn editing_secure_note_preserves_id_and_replaces_contents() {
+        let mut vault = Vault::new();
+        let id = vault
+            .add_secure_note("Old title".into(), "old body".into())
+            .unwrap();
+
+        vault.updated_unix = 0;
+        vault
+            .update_secure_note(id, "New title".into(), "line one\nline two".into())
+            .unwrap();
+
+        assert_eq!(vault.notes.len(), 1);
+        assert_eq!(vault.notes[0].id, id);
+        assert_eq!(vault.notes[0].title, "New title");
+        assert_eq!(vault.notes[0].body, "line one\nline two");
+        assert_eq!(vault.notes[0].deleted_unix, None);
+        assert!(vault.updated_unix > 0);
     }
 
     #[test]
