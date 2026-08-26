@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{AddField, App, Mode},
+    app::{AddField, App, Mode, NoteField},
     generator::PasswordStrength,
     password_analysis::{reused_password_groups, weak_password_findings},
 };
@@ -37,6 +37,10 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         Mode::AddEntry | Mode::EditEntry => {
             draw_vault(frame, app, chunks[1]);
             draw_entry_form(frame, app, chunks[1]);
+        }
+        Mode::AddNote => {
+            draw_vault(frame, app, chunks[1]);
+            draw_note_form(frame, app, chunks[1]);
         }
         Mode::ConfirmDelete => {
             if app.is_empty_recently_deleted_confirmation() {
@@ -111,6 +115,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Vault
         | Mode::AddEntry
         | Mode::EditEntry
+        | Mode::AddNote
         | Mode::ConfirmDelete
         | Mode::RecentlyDeleted
         | Mode::Generator => return,
@@ -170,6 +175,7 @@ fn draw_secret_screen(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Vault
         | Mode::AddEntry
         | Mode::EditEntry
+        | Mode::AddNote
         | Mode::ConfirmDelete
         | Mode::RecentlyDeleted
         | Mode::Generator => "",
@@ -746,7 +752,7 @@ fn draw_secure_notes(frame: &mut Frame, app: &App, area: Rect) {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Creation comes in the next slice.",
+                "  Press a to create one.",
                 Style::default().fg(Color::Yellow),
             )),
         ]
@@ -1277,6 +1283,7 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
         | Mode::Confirm
         | Mode::Unlock
         | Mode::Vault
+        | Mode::AddNote
         | Mode::ConfirmDelete
         | Mode::RecentlyDeleted
         | Mode::Generator => return,
@@ -1364,6 +1371,83 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new("Tab / Shift+Tab fields  •  Enter next/save  •  Ctrl+S save  •  Esc cancel")
             .style(Style::default().fg(Color::DarkGray)),
         rows[6],
+    );
+}
+
+fn draw_note_form(frame: &mut Frame, app: &App, area: Rect) {
+    let popup = centered_rect(80, 25, area);
+    frame.render_widget(Clear, popup);
+
+    let outer = Block::default()
+        .title(" Add secure note ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = outer.inner(popup);
+    frame.render_widget(outer, popup);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(
+            "Encrypted free-form note. Only the title is required; the body can span multiple lines.",
+        )
+        .style(Style::default().fg(Color::Gray))
+        .wrap(Wrap { trim: true }),
+        rows[0],
+    );
+
+    let title_selected = app.note_form().field() == NoteField::Title;
+    let title = app.note_form().value(NoteField::Title);
+    frame.render_widget(
+        Paragraph::new(if title.is_empty() { " " } else { title })
+            .style(Style::default().fg(Color::White))
+            .block(
+                Block::default()
+                    .title(" Title ")
+                    .borders(Borders::ALL)
+                    .border_style(if title_selected {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }),
+            ),
+        rows[1],
+    );
+
+    let body_selected = app.note_form().field() == NoteField::Body;
+    let body = app.note_form().value(NoteField::Body);
+    frame.render_widget(
+        Paragraph::new(if body.is_empty() { " " } else { body })
+            .style(Style::default().fg(Color::Gray))
+            .block(
+                Block::default()
+                    .title(" Body ")
+                    .borders(Borders::ALL)
+                    .border_style(if body_selected {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }),
+            )
+            .wrap(Wrap { trim: false }),
+        rows[2],
+    );
+
+    frame.render_widget(
+        Paragraph::new(
+            "Tab fields  •  Enter title→body / new line  •  Ctrl+S or Ctrl+Enter save  •  Esc cancel",
+        )
+        .style(Style::default().fg(Color::DarkGray))
+        .wrap(Wrap { trim: true }),
+        rows[3],
     );
 }
 
@@ -1572,16 +1656,16 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
         Mode::Vault if app.vault_show_notes() => {
-            "  1 Passwords   2 Notes   ↑↓/jk Select   Tab Deleted   g Generate   s Audit"
+            "  Tab Deleted   g Generate   s Audit   a Add note   ↑↓/jk Select"
         }
         Mode::Vault if app.search_editing() => {
             "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"
         }
         Mode::Vault if !app.search_query().is_empty() => {
-            "  / Search   Esc Clear   g Generate   s Audit   u User   p Pass   v Reveal   e Edit"
+            "  Tab Deleted   g Generate   s Audit   / Search   Esc Clear   u User   p Pass   v Reveal   e Edit"
         }
         Mode::Vault => {
-            "  / Search   g Generate   s Audit   u User   p Pass   v Reveal   a Add   e Edit"
+            "  Tab Deleted   g Generate   s Audit   / Search   u User   p Pass   v Reveal   a Add   e Edit"
         }
         Mode::RecentlyDeleted => {
             "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"
@@ -1589,6 +1673,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::AddEntry | Mode::EditEntry => {
             "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel"
         }
+        Mode::AddNote => "  Ctrl+S Save   Tab Fields   Enter Next/New line   Esc Cancel",
         Mode::Generator => "  ←/→ Length   1-4 Sets   r Regenerate   c Copy   Esc Vault",
         Mode::ConfirmDelete => {
             if app.is_empty_recently_deleted_confirmation() {

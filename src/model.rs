@@ -186,6 +186,17 @@ impl Vault {
         }
     }
 
+    fn next_item_id(&self) -> Result<u64, String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.id)
+            .chain(self.notes.iter().map(|note| note.id))
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| "vault item ID space exhausted".to_string())
+    }
+
     pub(crate) fn add_password_entry(
         &mut self,
         title: String,
@@ -199,15 +210,7 @@ impl Vault {
         let mut password = Zeroizing::new(password);
         let mut url = Zeroizing::new(url);
         let mut notes = Zeroizing::new(notes);
-
-        let id = self
-            .entries
-            .iter()
-            .map(|entry| entry.id)
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| "vault entry ID space exhausted".to_string())?;
+        let id = self.next_item_id()?;
 
         self.entries.push(PasswordEntry {
             id,
@@ -216,6 +219,23 @@ impl Vault {
             password: std::mem::take(&mut *password),
             url: std::mem::take(&mut *url),
             notes: std::mem::take(&mut *notes),
+            deleted_unix: None,
+        });
+
+        self.updated_unix = now_unix();
+
+        Ok(id)
+    }
+
+    pub(crate) fn add_secure_note(&mut self, title: String, body: String) -> Result<u64, String> {
+        let mut title = Zeroizing::new(title);
+        let mut body = Zeroizing::new(body);
+        let id = self.next_item_id()?;
+
+        self.notes.push(SecureNote {
+            id,
+            title: std::mem::take(&mut *title),
+            body: std::mem::take(&mut *body),
             deleted_unix: None,
         });
 
@@ -514,6 +534,41 @@ mod tests {
                 .iter()
                 .all(|entry| entry.deleted_unix.is_none())
         );
+    }
+
+    #[test]
+    fn password_and_secure_note_ids_share_one_monotonic_space() {
+        let mut vault = Vault::new();
+
+        let password_id = vault
+            .add_password_entry(
+                "Login".into(),
+                String::new(),
+                "secret".into(),
+                String::new(),
+                String::new(),
+            )
+            .unwrap();
+        let note_id = vault
+            .add_secure_note("Recovery".into(), "first line\nsecond line".into())
+            .unwrap();
+        let second_password_id = vault
+            .add_password_entry(
+                "Second login".into(),
+                String::new(),
+                "another-secret".into(),
+                String::new(),
+                String::new(),
+            )
+            .unwrap();
+
+        assert_eq!(password_id, 1);
+        assert_eq!(note_id, 2);
+        assert_eq!(second_password_id, 3);
+        assert_eq!(vault.notes.len(), 1);
+        assert_eq!(vault.notes[0].title, "Recovery");
+        assert_eq!(vault.notes[0].body, "first line\nsecond line");
+        assert!(vault.notes[0].deleted_unix.is_none());
     }
 
     #[test]

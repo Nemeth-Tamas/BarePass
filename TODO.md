@@ -95,7 +95,8 @@ This is a pre-1.0 core requirement, not an optional stretch goal.
 * [x] Add the Secure Note item model and encrypted payload-v2 persistence.
 * [x] Add visible Active / Recently Deleted vault navigation tabs.
 * [x] Add Passwords / Notes active-vault tabs and read-only Secure Note browsing.
-* [ ] Add Secure Note create/edit TUI.
+* [x] Add Secure Note creation TUI.
+* [ ] Add Secure Note editing TUI.
 * [ ] Add Secure Note search, clipboard, and recovery.
 * [ ] Credit-card records.
 * [ ] File uploads / encrypted attachments.
