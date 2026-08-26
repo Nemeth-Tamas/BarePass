@@ -1287,6 +1287,7 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
         | Mode::Unlock
         | Mode::Vault
         | Mode::AddNote
+        | Mode::EditNote
         | Mode::ConfirmDelete
         | Mode::RecentlyDeleted
         | Mode::Generator => return,
