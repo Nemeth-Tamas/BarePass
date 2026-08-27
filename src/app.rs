@@ -121,6 +121,7 @@ impl AddField {
 
 pub(crate) struct AddEntryForm {
     field: AddField,
+    cursor: usize,
     title: Zeroizing<String>,
     username: Zeroizing<String>,
     password: Zeroizing<String>,
@@ -132,6 +133,7 @@ impl AddEntryForm {
     fn new() -> Self {
         Self {
             field: AddField::Title,
+            cursor: 0,
             title: Zeroizing::new(String::new()),
             username: Zeroizing::new(String::new()),
             password: Zeroizing::new(String::new()),
@@ -148,6 +150,7 @@ impl AddEntryForm {
         self.password.push_str(&entry.password);
         self.url.push_str(&entry.url);
         self.notes.push_str(&entry.notes);
+        self.cursor = self.title.len();
     }
 
     pub(crate) fn field(&self) -> AddField {
@@ -164,22 +167,80 @@ impl AddEntryForm {
         }
     }
 
-    fn current_value_mut(&mut self) -> &mut String {
-        match self.field {
-            AddField::Title => &mut self.title,
-            AddField::Username => &mut self.username,
-            AddField::Password => &mut self.password,
-            AddField::Url => &mut self.url,
-            AddField::Notes => &mut self.notes,
+    pub(crate) fn cursor_character_index(&self) -> usize {
+        character_index_at_cursor(self.value(self.field), self.cursor)
+    }
+
+    fn current_value_and_cursor_mut(&mut self) -> (&mut String, &mut usize) {
+        let field = self.field;
+        let cursor = &mut self.cursor;
+
+        match field {
+            AddField::Title => (&mut *self.title, cursor),
+            AddField::Username => (&mut *self.username, cursor),
+            AddField::Password => (&mut *self.password, cursor),
+            AddField::Url => (&mut *self.url, cursor),
+            AddField::Notes => (&mut *self.notes, cursor),
         }
     }
 
+    fn insert_character(&mut self, character: char) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        insert_character_at_cursor(value, cursor, character);
+    }
+
+    fn backspace(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        delete_previous_character(value, cursor);
+    }
+
+    fn delete(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        delete_next_character(value, cursor);
+    }
+
+    fn delete_previous_word(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        delete_previous_word_at_cursor(value, cursor);
+    }
+
+    fn clear_current(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        clear_text_input_at_cursor(value, cursor);
+    }
+
+    fn move_left(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        move_cursor_left(value, cursor);
+    }
+
+    fn move_right(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        move_cursor_right(value, cursor);
+    }
+
+    fn move_home(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        move_cursor_line_start(value, cursor);
+    }
+
+    fn move_end(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        move_cursor_line_end(value, cursor);
+    }
+
+    fn select_field(&mut self, field: AddField) {
+        let cursor = self.value(field).len();
+        self.field = field;
+        self.cursor = cursor;
+    }
+
     fn next_field(&mut self) {
-        self.field = self.field.next();
+        self.select_field(self.field.next());
     }
 
     fn previous_field(&mut self) {
-        self.field = self.field.previous();
+        self.select_field(self.field.previous());
     }
 
     fn reset(&mut self) {
@@ -196,6 +257,7 @@ impl AddEntryForm {
         self.notes.clear();
 
         self.field = AddField::Title;
+        self.cursor = 0;
     }
 }
 
@@ -207,6 +269,7 @@ pub(crate) enum NoteField {
 
 pub(crate) struct SecureNoteForm {
     field: NoteField,
+    cursor: usize,
     title: Zeroizing<String>,
     body: Zeroizing<String>,
 }
@@ -215,6 +278,7 @@ impl SecureNoteForm {
     fn new() -> Self {
         Self {
             field: NoteField::Title,
+            cursor: 0,
             title: Zeroizing::new(String::new()),
             body: Zeroizing::new(String::new()),
         }
@@ -224,6 +288,7 @@ impl SecureNoteForm {
         self.reset();
         self.title.push_str(&note.title);
         self.body.push_str(&note.body);
+        self.cursor = self.title.len();
     }
 
     pub(crate) fn field(&self) -> NoteField {
@@ -237,19 +302,95 @@ impl SecureNoteForm {
         }
     }
 
-    fn current_value_mut(&mut self) -> &mut String {
-        match self.field {
-            NoteField::Title => &mut self.title,
-            NoteField::Body => &mut self.body,
+    pub(crate) fn cursor_byte_index(&self) -> usize {
+        clamp_cursor_to_boundary(self.value(self.field), self.cursor)
+    }
+
+    pub(crate) fn cursor_character_index(&self) -> usize {
+        character_index_at_cursor(self.value(self.field), self.cursor)
+    }
+
+    fn current_value_and_cursor_mut(&mut self) -> (&mut String, &mut usize) {
+        let field = self.field;
+        let cursor = &mut self.cursor;
+
+        match field {
+            NoteField::Title => (&mut *self.title, cursor),
+            NoteField::Body => (&mut *self.body, cursor),
         }
     }
 
+    fn insert_character(&mut self, character: char) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        insert_character_at_cursor(value, cursor, character);
+    }
+
+    fn backspace(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        delete_previous_character(value, cursor);
+    }
+
+    fn delete(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        delete_next_character(value, cursor);
+    }
+
+    fn delete_previous_word(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        delete_previous_word_at_cursor(value, cursor);
+    }
+
+    fn clear_current(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        clear_text_input_at_cursor(value, cursor);
+    }
+
+    fn move_left(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        move_cursor_left(value, cursor);
+    }
+
+    fn move_right(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        move_cursor_right(value, cursor);
+    }
+
+    fn move_home(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        move_cursor_line_start(value, cursor);
+    }
+
+    fn move_end(&mut self) {
+        let (value, cursor) = self.current_value_and_cursor_mut();
+        move_cursor_line_end(value, cursor);
+    }
+
+    fn move_up(&mut self) {
+        if self.field == NoteField::Body {
+            let (value, cursor) = self.current_value_and_cursor_mut();
+            move_cursor_up(value, cursor);
+        }
+    }
+
+    fn move_down(&mut self) {
+        if self.field == NoteField::Body {
+            let (value, cursor) = self.current_value_and_cursor_mut();
+            move_cursor_down(value, cursor);
+        }
+    }
+
+    fn select_field(&mut self, field: NoteField) {
+        let cursor = self.value(field).len();
+        self.field = field;
+        self.cursor = cursor;
+    }
+
     fn next_field(&mut self) {
-        self.field = NoteField::Body;
+        self.select_field(NoteField::Body);
     }
 
     fn previous_field(&mut self) {
-        self.field = NoteField::Title;
+        self.select_field(NoteField::Title);
     }
 
     fn reset(&mut self) {
@@ -258,6 +399,7 @@ impl SecureNoteForm {
         self.title.clear();
         self.body.clear();
         self.field = NoteField::Title;
+        self.cursor = 0;
     }
 }
 
@@ -278,6 +420,190 @@ fn delete_previous_word(value: &mut String) {
 fn clear_text_input(value: &mut String) {
     value.zeroize();
     value.clear();
+}
+
+fn clamp_cursor_to_boundary(value: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(value.len());
+
+    while !value.is_char_boundary(cursor) {
+        cursor = cursor.saturating_sub(1);
+    }
+
+    cursor
+}
+
+fn character_index_at_cursor(value: &str, cursor: usize) -> usize {
+    let cursor = clamp_cursor_to_boundary(value, cursor);
+    value[..cursor].chars().count()
+}
+
+fn previous_char_boundary(value: &str, cursor: usize) -> usize {
+    let cursor = clamp_cursor_to_boundary(value, cursor);
+
+    value[..cursor]
+        .char_indices()
+        .next_back()
+        .map_or(0, |(index, _)| index)
+}
+
+fn next_char_boundary(value: &str, cursor: usize) -> usize {
+    let cursor = clamp_cursor_to_boundary(value, cursor);
+
+    value[cursor..]
+        .chars()
+        .next()
+        .map_or(cursor, |character| cursor + character.len_utf8())
+}
+
+fn insert_character_at_cursor(value: &mut String, cursor: &mut usize, character: char) {
+    *cursor = clamp_cursor_to_boundary(value, *cursor);
+    value.insert(*cursor, character);
+    *cursor += character.len_utf8();
+}
+
+fn delete_previous_character(value: &mut String, cursor: &mut usize) {
+    *cursor = clamp_cursor_to_boundary(value, *cursor);
+
+    if *cursor == 0 {
+        return;
+    }
+
+    let previous = previous_char_boundary(value, *cursor);
+    value.replace_range(previous..*cursor, "");
+    *cursor = previous;
+}
+
+fn delete_next_character(value: &mut String, cursor: &mut usize) {
+    *cursor = clamp_cursor_to_boundary(value, *cursor);
+
+    if *cursor >= value.len() {
+        return;
+    }
+
+    let next = next_char_boundary(value, *cursor);
+    value.replace_range(*cursor..next, "");
+}
+
+fn delete_previous_word_at_cursor(value: &mut String, cursor: &mut usize) {
+    *cursor = clamp_cursor_to_boundary(value, *cursor);
+
+    let original_cursor = *cursor;
+    let mut start = original_cursor;
+
+    while let Some((index, character)) = value[..start].char_indices().next_back() {
+        if !character.is_whitespace() {
+            break;
+        }
+
+        start = index;
+    }
+
+    while let Some((index, character)) = value[..start].char_indices().next_back() {
+        if character.is_whitespace() {
+            break;
+        }
+
+        start = index;
+    }
+
+    value.replace_range(start..original_cursor, "");
+    *cursor = start;
+}
+
+fn clear_text_input_at_cursor(value: &mut String, cursor: &mut usize) {
+    value.zeroize();
+    value.clear();
+    *cursor = 0;
+}
+
+fn move_cursor_left(value: &str, cursor: &mut usize) {
+    *cursor = previous_char_boundary(value, *cursor);
+}
+
+fn move_cursor_right(value: &str, cursor: &mut usize) {
+    *cursor = next_char_boundary(value, *cursor);
+}
+
+fn line_start_at_cursor(value: &str, cursor: usize) -> usize {
+    let cursor = clamp_cursor_to_boundary(value, cursor);
+
+    value[..cursor].rfind('\n').map_or(0, |newline| newline + 1)
+}
+
+fn line_end_at_cursor(value: &str, cursor: usize) -> usize {
+    let cursor = clamp_cursor_to_boundary(value, cursor);
+
+    value[cursor..]
+        .find('\n')
+        .map_or(value.len(), |relative| cursor + relative)
+}
+
+fn move_cursor_line_start(value: &str, cursor: &mut usize) {
+    *cursor = line_start_at_cursor(value, *cursor);
+}
+
+fn move_cursor_line_end(value: &str, cursor: &mut usize) {
+    *cursor = line_end_at_cursor(value, *cursor);
+}
+
+fn cursor_at_character_column(value: &str, start: usize, end: usize, column: usize) -> usize {
+    value[start..end]
+        .char_indices()
+        .nth(column)
+        .map_or(end, |(relative, _)| start + relative)
+}
+
+fn move_cursor_up(value: &str, cursor: &mut usize) {
+    *cursor = clamp_cursor_to_boundary(value, *cursor);
+
+    let current_start = line_start_at_cursor(value, *cursor);
+
+    if current_start == 0 {
+        return;
+    }
+
+    let column = value[current_start..*cursor].chars().count();
+    let previous_end = current_start - 1;
+    let previous_start = value[..previous_end]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1);
+
+    *cursor = cursor_at_character_column(value, previous_start, previous_end, column);
+}
+
+fn move_cursor_down(value: &str, cursor: &mut usize) {
+    *cursor = clamp_cursor_to_boundary(value, *cursor);
+
+    let current_start = line_start_at_cursor(value, *cursor);
+    let current_end = line_end_at_cursor(value, *cursor);
+
+    if current_end >= value.len() {
+        return;
+    }
+
+    let column = value[current_start..*cursor].chars().count();
+    let next_start = current_end + 1;
+    let next_end = value[next_start..]
+        .find('\n')
+        .map_or(value.len(), |relative| next_start + relative);
+
+    *cursor = cursor_at_character_column(value, next_start, next_end, column);
+}
+
+fn is_save_shortcut(key: &KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(
+            key.code,
+            KeyCode::Enter
+                | KeyCode::Char('s')
+                | KeyCode::Char('S')
+                | KeyCode::Char('j')
+                | KeyCode::Char('J')
+                | KeyCode::Char('m')
+                | KeyCode::Char('M')
+                | KeyCode::Char('\n')
+                | KeyCode::Char('\r')
+        )
 }
 
 #[cfg(target_os = "macos")]
@@ -1067,20 +1393,18 @@ impl App {
     }
 
     fn handle_entry_form_key(&mut self, key: KeyEvent) {
+        if is_save_shortcut(&key) {
+            self.save_entry_form();
+            return;
+        }
+
         if is_delete_word_shortcut(&key) {
-            delete_previous_word(self.add_form.current_value_mut());
+            self.add_form.delete_previous_word();
             return;
         }
 
         if is_clear_input_shortcut(&key) {
-            clear_text_input(self.add_form.current_value_mut());
-            return;
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-        {
-            self.save_entry_form();
+            self.add_form.clear_current();
             return;
         }
 
@@ -1107,37 +1431,35 @@ impl App {
                     self.add_form.next_field();
                 }
             }
-            KeyCode::Backspace => {
-                self.add_form.current_value_mut().pop();
-            }
+            KeyCode::Left => self.add_form.move_left(),
+            KeyCode::Right => self.add_form.move_right(),
+            KeyCode::Home => self.add_form.move_home(),
+            KeyCode::End => self.add_form.move_end(),
+            KeyCode::Delete => self.add_form.delete(),
+            KeyCode::Backspace => self.add_form.backspace(),
             KeyCode::Char(character)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
-                self.add_form.current_value_mut().push(character);
+                self.add_form.insert_character(character);
             }
             _ => {}
         }
     }
 
     fn handle_note_form_key(&mut self, key: KeyEvent) {
+        if is_save_shortcut(&key) {
+            self.save_note_form();
+            return;
+        }
+
         if is_delete_word_shortcut(&key) {
-            delete_previous_word(self.note_form.current_value_mut());
+            self.note_form.delete_previous_word();
             return;
         }
 
         if is_clear_input_shortcut(&key) {
-            clear_text_input(self.note_form.current_value_mut());
-            return;
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(
-                key.code,
-                KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Enter
-            )
-        {
-            self.save_note_form();
+            self.note_form.clear_current();
             return;
         }
 
@@ -1159,17 +1481,22 @@ impl App {
                 if self.note_form.field() == NoteField::Title {
                     self.note_form.next_field();
                 } else {
-                    self.note_form.current_value_mut().push('\n');
+                    self.note_form.insert_character('\n');
                 }
             }
-            KeyCode::Backspace => {
-                self.note_form.current_value_mut().pop();
-            }
+            KeyCode::Left => self.note_form.move_left(),
+            KeyCode::Right => self.note_form.move_right(),
+            KeyCode::Up => self.note_form.move_up(),
+            KeyCode::Down => self.note_form.move_down(),
+            KeyCode::Home => self.note_form.move_home(),
+            KeyCode::End => self.note_form.move_end(),
+            KeyCode::Delete => self.note_form.delete(),
+            KeyCode::Backspace => self.note_form.backspace(),
             KeyCode::Char(character)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
-                self.note_form.current_value_mut().push(character);
+                self.note_form.insert_character(character);
             }
             _ => {}
         }
@@ -2164,8 +2491,9 @@ mod tests {
 
     use super::{
         auto_lock_timeout_from_value, auto_purge_days_from_value, clear_text_input,
-        delete_previous_word, inactivity_expired, is_delete_word_shortcut,
-        password_entry_matches_search,
+        delete_next_character, delete_previous_word, inactivity_expired,
+        insert_character_at_cursor, is_delete_word_shortcut, is_save_shortcut, move_cursor_down,
+        move_cursor_left, move_cursor_right, move_cursor_up, password_entry_matches_search,
     };
     use crate::model::PasswordEntry;
 
@@ -2190,6 +2518,69 @@ mod tests {
         clear_text_input(&mut value);
 
         assert!(value.is_empty());
+    }
+
+    #[test]
+    fn cursor_editing_can_repair_text_in_the_middle_and_preserve_utf8() {
+        let mut value = "swaer at router".to_string();
+        let mut cursor = "sw".len();
+
+        insert_character_at_cursor(&mut value, &mut cursor, 'e');
+        move_cursor_right(&value, &mut cursor);
+        delete_next_character(&mut value, &mut cursor);
+
+        assert_eq!(value, "swear at router");
+        assert!(value.is_char_boundary(cursor));
+
+        let mut unicode = "béa".to_string();
+        let mut unicode_cursor = "bé".len();
+
+        insert_character_at_cursor(&mut unicode, &mut unicode_cursor, 't');
+
+        assert_eq!(unicode, "béta");
+        assert!(unicode.is_char_boundary(unicode_cursor));
+
+        move_cursor_left(&unicode, &mut unicode_cursor);
+        move_cursor_right(&unicode, &mut unicode_cursor);
+
+        assert!(unicode.is_char_boundary(unicode_cursor));
+    }
+
+    #[test]
+    fn multiline_cursor_moves_between_logical_lines() {
+        let value = "alpha\nbravo\ncharlie";
+        let mut cursor = "alpha\nbra".len();
+
+        move_cursor_up(value, &mut cursor);
+        assert_eq!(&value[..cursor], "alp");
+
+        move_cursor_down(value, &mut cursor);
+        assert_eq!(&value[..cursor], "alpha\nbra");
+
+        move_cursor_down(value, &mut cursor);
+        assert_eq!(&value[..cursor], "alpha\nbravo\ncha");
+    }
+
+    #[test]
+    fn save_shortcut_accepts_control_enter_and_terminal_control_newline_forms() {
+        for code in [
+            KeyCode::Enter,
+            KeyCode::Char('s'),
+            KeyCode::Char('j'),
+            KeyCode::Char('m'),
+            KeyCode::Char('\n'),
+            KeyCode::Char('\r'),
+        ] {
+            assert!(is_save_shortcut(&KeyEvent::new(
+                code,
+                KeyModifiers::CONTROL
+            )));
+        }
+
+        assert!(!is_save_shortcut(&KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE
+        )));
     }
 
     #[cfg(not(target_os = "macos"))]

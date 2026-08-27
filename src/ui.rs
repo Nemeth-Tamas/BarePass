@@ -1361,17 +1361,27 @@ fn draw_entry_form(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::White)
         };
 
-        let field_widget = Paragraph::new(display).style(text_style).block(
+        let mut field_widget = Paragraph::new(display).style(text_style).block(
             Block::default()
                 .title(label)
                 .borders(Borders::ALL)
                 .border_style(border_style),
         );
 
-        frame.render_widget(field_widget, rows[index + 1]);
+        let mut cursor_position = None;
 
         if selected {
-            place_single_line_cursor(frame, value.chars().count(), rows[index + 1]);
+            let (horizontal_scroll, cursor_x, cursor_y) =
+                single_line_cursor(app.add_form().cursor_character_index(), rows[index + 1]);
+
+            field_widget = field_widget.scroll((0, horizontal_scroll));
+            cursor_position = Some((cursor_x, cursor_y));
+        }
+
+        frame.render_widget(field_widget, rows[index + 1]);
+
+        if let Some(cursor_position) = cursor_position {
+            frame.set_cursor_position(cursor_position);
         }
     }
 
@@ -1419,30 +1429,40 @@ fn draw_note_form(frame: &mut Frame, app: &App, area: Rect) {
 
     let title_selected = app.note_form().field() == NoteField::Title;
     let title = app.note_form().value(NoteField::Title);
-    frame.render_widget(
-        Paragraph::new(if title.is_empty() { " " } else { title })
-            .style(Style::default().fg(Color::White))
-            .block(
-                Block::default()
-                    .title(" Title ")
-                    .borders(Borders::ALL)
-                    .border_style(if title_selected {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    }),
-            ),
-        rows[1],
-    );
+
+    let mut title_widget = Paragraph::new(if title.is_empty() { " " } else { title })
+        .style(Style::default().fg(Color::White))
+        .block(
+            Block::default()
+                .title(" Title ")
+                .borders(Borders::ALL)
+                .border_style(if title_selected {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                }),
+        );
+
+    let mut title_cursor_position = None;
 
     if title_selected {
-        place_single_line_cursor(frame, title.chars().count(), rows[1]);
+        let (horizontal_scroll, cursor_x, cursor_y) =
+            single_line_cursor(app.note_form().cursor_character_index(), rows[1]);
+
+        title_widget = title_widget.scroll((0, horizontal_scroll));
+        title_cursor_position = Some((cursor_x, cursor_y));
+    }
+
+    frame.render_widget(title_widget, rows[1]);
+
+    if let Some(cursor_position) = title_cursor_position {
+        frame.set_cursor_position(cursor_position);
     }
 
     let body_selected = app.note_form().field() == NoteField::Body;
     let body = app.note_form().value(NoteField::Body);
     let (cursor_x, cursor_y, vertical_scroll, horizontal_scroll) =
-        multiline_cursor_at_end(body, rows[2]);
+        multiline_cursor(body, app.note_form().cursor_byte_index(), rows[2]);
 
     frame.render_widget(
         Paragraph::new(if body.is_empty() { " " } else { body })
@@ -1695,10 +1715,10 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"
         }
         Mode::AddEntry | Mode::EditEntry => {
-            "  Tab Fields   Enter Next/Save   Ctrl+S Save   Esc Cancel"
+            "  Ctrl+S/Ctrl+Enter Save   Tab Fields   ←→ Home/End Move   Del/Backspace Edit   Esc Cancel"
         }
         Mode::AddNote | Mode::EditNote => {
-            "  Ctrl+S Save   Tab Fields   Enter Next/New line   Esc Cancel"
+            "  Ctrl+S/Ctrl+Enter Save   Tab Fields   ←→ Move   ↑↓ Body lines   Home/End   Esc Cancel"
         }
         Mode::Generator => "  ←/→ Length   1-4 Sets   r Regenerate   c Copy   Esc Vault",
         Mode::ConfirmDelete => {
@@ -1738,20 +1758,46 @@ fn place_single_line_cursor(frame: &mut Frame, character_count: usize, area: Rec
     ));
 }
 
-fn multiline_cursor_at_end(value: &str, area: Rect) -> (u16, u16, u16, u16) {
+fn single_line_cursor(character_index: usize, area: Rect) -> (u16, u16, u16) {
+    let width = usize::from(area.width.saturating_sub(2).max(1));
+    let max_visible_column = width.saturating_sub(1);
+
+    let horizontal_scroll = character_index.saturating_sub(max_visible_column);
+    let visible_column = character_index.saturating_sub(horizontal_scroll);
+
+    (
+        u16::try_from(horizontal_scroll).unwrap_or(u16::MAX),
+        area.x
+            .saturating_add(1 + u16::try_from(visible_column).unwrap_or(u16::MAX)),
+        area.y.saturating_add(1),
+    )
+}
+
+fn multiline_cursor(value: &str, cursor: usize, area: Rect) -> (u16, u16, u16, u16) {
+    let mut cursor = cursor.min(value.len());
+
+    while !value.is_char_boundary(cursor) {
+        cursor = cursor.saturating_sub(1);
+    }
+
     let width = usize::from(area.width.saturating_sub(2).max(1));
     let height = usize::from(area.height.saturating_sub(2).max(1));
-    let line_count = value.split('\n').count();
-    let last_line_width = value
+
+    let before_cursor = &value[..cursor];
+
+    let line_index = before_cursor.bytes().filter(|byte| *byte == b'\n').count();
+
+    let column = before_cursor
         .rsplit_once('\n')
-        .map_or(value, |(_, last_line)| last_line)
+        .map_or(before_cursor, |(_, line)| line)
         .chars()
         .count();
 
-    let vertical_scroll = line_count.saturating_sub(height);
-    let horizontal_scroll = last_line_width.saturating_sub(width.saturating_sub(1));
-    let visible_row = line_count.saturating_sub(1).saturating_sub(vertical_scroll);
-    let visible_column = last_line_width.saturating_sub(horizontal_scroll);
+    let vertical_scroll = line_index.saturating_sub(height.saturating_sub(1));
+    let horizontal_scroll = column.saturating_sub(width.saturating_sub(1));
+
+    let visible_row = line_index.saturating_sub(vertical_scroll);
+    let visible_column = column.saturating_sub(horizontal_scroll);
 
     (
         area.x
