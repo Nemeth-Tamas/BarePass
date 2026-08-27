@@ -732,11 +732,18 @@ fn draw_secure_notes(frame: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    let active_notes: Vec<_> = unlocked
+    let total_active_count = unlocked
         .data()
         .notes
         .iter()
         .filter(|note| note.deleted_unix.is_none())
+        .count();
+
+    let active_notes: Vec<_> = unlocked
+        .data()
+        .notes
+        .iter()
+        .filter(|note| note.deleted_unix.is_none() && app.note_matches_search(note))
         .collect();
 
     let columns = Layout::default()
@@ -744,7 +751,22 @@ fn draw_secure_notes(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(area);
 
-    let list_lines = if active_notes.is_empty() {
+    let list_lines = if active_notes.is_empty() && total_active_count != 0 {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No secure notes match your search.",
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::ITALIC),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Esc clears the current filter.",
+                Style::default().fg(Color::Yellow),
+            )),
+        ]
+    } else if active_notes.is_empty() {
         vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -766,6 +788,7 @@ fn draw_secure_notes(frame: &mut Frame, app: &App, area: Rect) {
             .map(|(index, note)| {
                 let selected = index == app.note_selected_index();
                 let marker = if selected { " > " } else { "   " };
+
                 let style = if selected {
                     Style::default()
                         .fg(Color::Yellow)
@@ -783,11 +806,30 @@ fn draw_secure_notes(frame: &mut Frame, app: &App, area: Rect) {
             .collect()
     };
 
+    let list_title = if app.search_editing() || !app.search_query().is_empty() {
+        Line::from(vec![
+            Span::raw(format!(
+                " Secure Notes  {}/{} match  |  Search: ",
+                active_notes.len(),
+                total_active_count
+            )),
+            Span::styled(
+                app.search_query(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+        ])
+    } else {
+        Line::from(format!(" Secure Notes  {} active ", total_active_count))
+    };
+
     frame.render_widget(
         Paragraph::new(list_lines)
             .block(
                 Block::default()
-                    .title(format!(" Secure Notes  {} active ", active_notes.len()))
+                    .title(list_title)
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::DarkGray)),
             )
@@ -840,7 +882,11 @@ fn draw_secure_notes(frame: &mut Frame, app: &App, area: Rect) {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "Encrypted note browsing is ready.",
+                if app.search_query().is_empty() {
+                    "Encrypted note browsing is ready."
+                } else {
+                    "No secure note matches the current search."
+                },
                 Style::default().fg(Color::Green),
             )),
         ]
@@ -1699,11 +1745,14 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 "  Tab Weak   ↑↓/jk Reuse groups   Esc Vault   l Lock   q Quit"
             }
         }
-        Mode::Vault if app.vault_show_notes() => {
-            "  Tab Deleted   g Generate   s Audit   a Add note   ↑↓/jk Select"
-        }
         Mode::Vault if app.search_editing() => {
             "  Search typing   Enter Keep filter   Esc Clear   ↑↓ Select"
+        }
+        Mode::Vault if app.vault_show_notes() && !app.search_query().is_empty() => {
+            "  Tab Deleted   g Generate   s Audit   / Search   Esc Clear   c Copy body   a Add   e Edit   ↑↓/jk Select"
+        }
+        Mode::Vault if app.vault_show_notes() => {
+            "  Tab Deleted   g Generate   s Audit   / Search   c Copy body   a Add   e Edit   ↑↓/jk Select"
         }
         Mode::Vault if !app.search_query().is_empty() => {
             "  Tab Deleted   g Generate   s Audit   / Search   Esc Clear   u User   p Pass   v Reveal   e Edit"
@@ -1715,10 +1764,10 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             "  r Restore   d Delete forever   x Empty all   Tab/Esc Active   ↑↓/jk Select"
         }
         Mode::AddEntry | Mode::EditEntry => {
-            "  Ctrl+S/Ctrl+Enter Save   Tab Fields   ←→ Home/End Move   Del/Backspace Edit   Esc Cancel"
+            "  Ctrl+S/Ctrl+Enter Save   Tab Fields   ←→ Move   Ctrl+←→ Words   Home/End   Del/Backspace   Esc Cancel"
         }
         Mode::AddNote | Mode::EditNote => {
-            "  Ctrl+S/Ctrl+Enter Save   Tab Fields   ←→ Move   ↑↓ Body lines   Home/End   Esc Cancel"
+            "  Ctrl+S/Ctrl+Enter Save   Tab Fields   ←→ Move   Ctrl+←→ Words   ↑↓ Body lines   Home/End   Esc Cancel"
         }
         Mode::Generator => "  ←/→ Length   1-4 Sets   r Regenerate   c Copy   Esc Vault",
         Mode::ConfirmDelete => {

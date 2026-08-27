@@ -73,6 +73,12 @@ fn password_entry_matches_search(entry: &PasswordEntry, query: &str) -> bool {
         || contains_ascii_case_insensitive(&entry.notes, query)
 }
 
+fn secure_note_matches_search(note: &SecureNote, query: &str) -> bool {
+    query.is_empty()
+        || contains_ascii_case_insensitive(&note.title, query)
+        || contains_ascii_case_insensitive(&note.body, query)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
     Create,
@@ -590,20 +596,65 @@ fn move_cursor_down(value: &str, cursor: &mut usize) {
     *cursor = cursor_at_character_column(value, next_start, next_end, column);
 }
 
+fn move_cursor_previous_word(value: &str, cursor: &mut usize) {
+    *cursor = clamp_cursor_to_boundary(value, *cursor);
+    let mut start = *cursor;
+
+    while let Some((index, character)) = value[..start].char_indices().next_back() {
+        if !character.is_whitespace() {
+            break;
+        }
+
+        start = index;
+    }
+
+    while let Some((index, character)) = value[..start].char_indices().next_back() {
+        if character.is_whitespace() {
+            break;
+        }
+
+        start = index;
+    }
+
+    *cursor = start;
+}
+
+fn move_cursor_next_word(value: &str, cursor: &mut usize) {
+    *cursor = clamp_cursor_to_boundary(value, *cursor);
+    let mut end = *cursor;
+
+    while let Some(character) = value[end..].chars().next() {
+        if character.is_whitespace() {
+            break;
+        }
+
+        end += character.len_utf8();
+    }
+
+    while let Some(character) = value[end..].chars().next() {
+        if !character.is_whitespace() {
+            break;
+        }
+
+        end += character.len_utf8();
+    }
+
+    *cursor = end;
+}
+
 fn is_save_shortcut(key: &KeyEvent) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(
-            key.code,
-            KeyCode::Enter
-                | KeyCode::Char('s')
-                | KeyCode::Char('S')
-                | KeyCode::Char('j')
-                | KeyCode::Char('J')
-                | KeyCode::Char('m')
-                | KeyCode::Char('M')
-                | KeyCode::Char('\n')
-                | KeyCode::Char('\r')
-        )
+    matches!(key.code, KeyCode::Char('\n') | KeyCode::Char('\r'))
+        || (key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(
+                key.code,
+                KeyCode::Enter
+                    | KeyCode::Char('s')
+                    | KeyCode::Char('S')
+                    | KeyCode::Char('j')
+                    | KeyCode::Char('J')
+                    | KeyCode::Char('m')
+                    | KeyCode::Char('M')
+            ))
 }
 
 #[cfg(target_os = "macos")]
@@ -771,7 +822,10 @@ impl App {
             .data()
             .notes
             .iter()
-            .filter(|note| note.deleted_unix.is_none())
+            .filter(|note| {
+                note.deleted_unix.is_none()
+                    && secure_note_matches_search(note, self.search_query.as_str())
+            })
             .nth(self.note_selected)
     }
 
@@ -784,6 +838,10 @@ impl App {
 
     pub(crate) fn entry_matches_search(&self, entry: &PasswordEntry) -> bool {
         password_entry_matches_search(entry, self.search_query.as_str())
+    }
+
+    pub(crate) fn note_matches_search(&self, note: &SecureNote) -> bool {
+        secure_note_matches_search(note, self.search_query.as_str())
     }
 
     pub(crate) fn search_query(&self) -> &str {
@@ -952,10 +1010,11 @@ impl App {
             KeyCode::Char('l') => self.lock_vault(),
             KeyCode::Char('1') => self.show_passwords_tab(),
             KeyCode::Char('2') => self.show_notes_tab(),
-            KeyCode::Char('/') if !self.vault_show_notes => {
+            KeyCode::Char('/') => {
                 self.search_editing = true;
                 self.revealed_password_entry_id = None;
                 self.selected = 0;
+                self.note_selected = 0;
                 self.update_search_status();
             }
             KeyCode::Esc if !self.search_query.is_empty() => {
@@ -975,6 +1034,7 @@ impl App {
                     self.open_edit_entry();
                 }
             }
+            KeyCode::Char('c') if self.vault_show_notes => self.copy_selected_note_body(),
             KeyCode::Char('u') if !self.vault_show_notes => self.copy_selected_username(),
             KeyCode::Char('p') if !self.vault_show_notes => self.copy_selected_password(),
             KeyCode::Char('v') if !self.vault_show_notes => self.toggle_selected_password_reveal(),
@@ -989,8 +1049,12 @@ impl App {
     }
 
     fn show_passwords_tab(&mut self) {
+        self.search_query.zeroize();
+        self.search_query.clear();
+        self.search_editing = false;
         self.vault_show_notes = false;
         self.revealed_password_entry_id = None;
+        self.selected = 0;
         self.status = "Passwords view selected.".into();
     }
 
@@ -1023,10 +1087,28 @@ impl App {
             .unwrap_or(0)
     }
 
+    fn filtered_active_note_count(&self) -> usize {
+        self.vault
+            .as_ref()
+            .map(|vault| {
+                vault
+                    .data()
+                    .notes
+                    .iter()
+                    .filter(|note| {
+                        note.deleted_unix.is_none()
+                            && secure_note_matches_search(note, self.search_query.as_str())
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     fn handle_search_key(&mut self, key: KeyEvent) {
         if is_delete_word_shortcut(&key) {
             delete_previous_word(&mut self.search_query);
             self.selected = 0;
+            self.note_selected = 0;
             self.revealed_password_entry_id = None;
             self.update_search_status();
             return;
@@ -1035,6 +1117,7 @@ impl App {
         if is_clear_input_shortcut(&key) {
             clear_text_input(&mut self.search_query);
             self.selected = 0;
+            self.note_selected = 0;
             self.revealed_password_entry_id = None;
             self.update_search_status();
             return;
@@ -1051,6 +1134,7 @@ impl App {
             KeyCode::Backspace => {
                 self.search_query.pop();
                 self.selected = 0;
+                self.note_selected = 0;
                 self.revealed_password_entry_id = None;
                 self.update_search_status();
             }
@@ -1060,6 +1144,7 @@ impl App {
             {
                 self.search_query.push(character);
                 self.selected = 0;
+                self.note_selected = 0;
                 self.revealed_password_entry_id = None;
                 self.update_search_status();
             }
@@ -1068,13 +1153,23 @@ impl App {
     }
 
     fn update_search_status(&mut self) {
-        let count = self.filtered_active_count();
+        if self.vault_show_notes {
+            let count = self.filtered_active_note_count();
 
-        self.status = if self.search_query.is_empty() {
-            format!("Search active. {count} password entry(s) available.")
+            self.status = if self.search_query.is_empty() {
+                format!("Search active. {count} secure note(s) available.")
+            } else {
+                format!("Search filter matches {count} secure note(s).")
+            };
         } else {
-            format!("Search filter matches {count} password entry(s).")
-        };
+            let count = self.filtered_active_count();
+
+            self.status = if self.search_query.is_empty() {
+                format!("Search active. {count} password entry(s) available.")
+            } else {
+                format!("Search filter matches {count} password entry(s).")
+            };
+        }
     }
 
     fn clear_search(&mut self) {
@@ -1082,6 +1177,7 @@ impl App {
         self.search_query.clear();
         self.search_editing = false;
         self.selected = 0;
+        self.note_selected = 0;
         self.revealed_password_entry_id = None;
         self.status = "Search cleared.".into();
     }
@@ -1116,6 +1212,22 @@ impl App {
         };
 
         self.copy_text_to_clipboard(password.as_str(), "Password");
+    }
+
+    fn copy_selected_note_body(&mut self) {
+        let body = match self.selected_note() {
+            Some(note) if !note.body.is_empty() => Zeroizing::new(note.body.clone()),
+            Some(_) => {
+                self.status = "The selected secure note has an empty body.".into();
+                return;
+            }
+            None => {
+                self.status = "There is no secure note selected to copy from.".into();
+                return;
+            }
+        };
+
+        self.copy_text_to_clipboard(body.as_str(), "Secure note body");
     }
 
     fn toggle_selected_password_reveal(&mut self) {
@@ -1393,6 +1505,24 @@ impl App {
     }
 
     fn handle_entry_form_key(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::ALT))
+        {
+            match key.code {
+                KeyCode::Left => {
+                    let (value, cursor) = self.add_form.current_value_and_cursor_mut();
+                    move_cursor_previous_word(value, cursor);
+                    return;
+                }
+                KeyCode::Right => {
+                    let (value, cursor) = self.add_form.current_value_and_cursor_mut();
+                    move_cursor_next_word(value, cursor);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         if is_save_shortcut(&key) {
             self.save_entry_form();
             return;
@@ -1448,6 +1578,24 @@ impl App {
     }
 
     fn handle_note_form_key(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            || (cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::ALT))
+        {
+            match key.code {
+                KeyCode::Left => {
+                    let (value, cursor) = self.note_form.current_value_and_cursor_mut();
+                    move_cursor_previous_word(value, cursor);
+                    return;
+                }
+                KeyCode::Right => {
+                    let (value, cursor) = self.note_form.current_value_and_cursor_mut();
+                    move_cursor_next_word(value, cursor);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         if is_save_shortcut(&key) {
             self.save_note_form();
             return;
@@ -1556,7 +1704,10 @@ impl App {
             .data()
             .notes
             .iter()
-            .filter(|note| note.deleted_unix.is_none())
+            .filter(|note| {
+                note.deleted_unix.is_none()
+                    && secure_note_matches_search(note, self.search_query.as_str())
+            })
             .nth(self.note_selected)
         else {
             self.status = "There is no secure note selected to edit.".into();
@@ -1699,7 +1850,7 @@ impl App {
 
     fn move_selection_down(&mut self) {
         if self.vault_show_notes {
-            let active_count = self.active_note_count();
+            let active_count = self.filtered_active_note_count();
             if self.note_selected + 1 < active_count {
                 self.note_selected += 1;
             }
@@ -2493,9 +2644,10 @@ mod tests {
         auto_lock_timeout_from_value, auto_purge_days_from_value, clear_text_input,
         delete_next_character, delete_previous_word, inactivity_expired,
         insert_character_at_cursor, is_delete_word_shortcut, is_save_shortcut, move_cursor_down,
-        move_cursor_left, move_cursor_right, move_cursor_up, password_entry_matches_search,
+        move_cursor_left, move_cursor_next_word, move_cursor_previous_word, move_cursor_right,
+        move_cursor_up, password_entry_matches_search, secure_note_matches_search,
     };
-    use crate::model::PasswordEntry;
+    use crate::model::{PasswordEntry, SecureNote};
 
     #[test]
     fn delete_previous_word_handles_unicode_and_trailing_whitespace() {
@@ -2562,20 +2714,44 @@ mod tests {
     }
 
     #[test]
-    fn save_shortcut_accepts_control_enter_and_terminal_control_newline_forms() {
+    fn cursor_can_jump_between_words_without_breaking_unicode() {
+        let value = "alpha béta gamma";
+        let mut cursor = value.len();
+
+        move_cursor_previous_word(value, &mut cursor);
+        assert_eq!(&value[cursor..], "gamma");
+
+        move_cursor_previous_word(value, &mut cursor);
+        assert_eq!(&value[cursor..], "béta gamma");
+
+        move_cursor_next_word(value, &mut cursor);
+        assert_eq!(&value[cursor..], "gamma");
+
+        assert!(value.is_char_boundary(cursor));
+    }
+
+    #[test]
+    fn save_shortcut_accepts_control_enter_and_raw_control_newline_forms() {
         for code in [
             KeyCode::Enter,
             KeyCode::Char('s'),
             KeyCode::Char('j'),
             KeyCode::Char('m'),
-            KeyCode::Char('\n'),
-            KeyCode::Char('\r'),
         ] {
             assert!(is_save_shortcut(&KeyEvent::new(
                 code,
                 KeyModifiers::CONTROL
             )));
         }
+
+        assert!(is_save_shortcut(&KeyEvent::new(
+            KeyCode::Char('\n'),
+            KeyModifiers::NONE
+        )));
+        assert!(is_save_shortcut(&KeyEvent::new(
+            KeyCode::Char('\r'),
+            KeyModifiers::NONE
+        )));
 
         assert!(!is_save_shortcut(&KeyEvent::new(
             KeyCode::Enter,
@@ -2666,5 +2842,20 @@ mod tests {
             "hidden-search-secret"
         ));
         assert!(!password_entry_matches_search(&entry, "missing"));
+    }
+
+    #[test]
+    fn secure_note_search_matches_title_and_body() {
+        let note = SecureNote {
+            id: 2,
+            title: "Router apocalypse".into(),
+            body: "Step 1: reboot router\nStep 2: swear at router".into(),
+            deleted_unix: None,
+        };
+
+        assert!(secure_note_matches_search(&note, ""));
+        assert!(secure_note_matches_search(&note, "APOCALYPSE"));
+        assert!(secure_note_matches_search(&note, "swear at router"));
+        assert!(!secure_note_matches_search(&note, "password"));
     }
 }

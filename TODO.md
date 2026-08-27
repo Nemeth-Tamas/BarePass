@@ -97,7 +97,8 @@ This is a pre-1.0 core requirement, not an optional stretch goal.
 * [x] Add Passwords / Notes active-vault tabs and read-only Secure Note browsing.
 * [x] Add Secure Note creation TUI.
 * [x] Add Secure Note editing TUI.
-* [ ] Add Secure Note search, clipboard, and recovery.
+* [x] Add Secure Note search and secure clipboard copy.
+* [ ] Add Secure Note deletion and recovery.
 * [ ] Credit-card records.
 * [ ] File uploads / encrypted attachments.
 * [x] Design a versioned generic vault-item format before introducing multiple item types.
